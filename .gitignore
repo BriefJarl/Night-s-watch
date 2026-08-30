@@ -1,0 +1,96 @@
+# ─────────────────────────────────────────────────────────────
+# IBVAP — Night's Watch  |  .gitignore
+# ─────────────────────────────────────────────────────────────
+
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+*.whl
+*.pyo
+.Python
+
+# ── Virtual environments ──────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ── Model weights (large binary files) ───────────────────────
+*.pt
+*.pth
+*.onnx
+*.engine
+*.trt
+
+# ── Databases ─────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Sensitive / secret config ─────────────────────────────────
+.env
+.env.*
+secrets.yaml
+secrets.yml
+config/secrets/
+
+# ── Logs & reports ────────────────────────────────────────────
+*.log
+logs/
+*.out
+
+# ── IDE / Editor ──────────────────────────────────────────────
+.vscode/
+.idea/
+*.code-workspace
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Streamlit internal state ──────────────────────────────────
+.streamlit/
+
+# ── Jupyter notebooks ─────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Testing / Coverage ────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+nosetests.xml
+test-results/
+
+# ── Docker ────────────────────────────────────────────────────
+*.env.docker
+
+# ── Hard-negative training crops (sensitive data) ─────────────
+backend/data/hard_negatives/
+
+# ── Sample / demo videos (large binary media) ─────────────────
+sample-videos/
+
+# ── Scratch / temp workspace ──────────────────────────────────
+scratch/
+
+# ── Agents internal files ─────────────────────────────────────
+.agents/
+
+# ── OS artefacts ─────────────────────────────────────────────
+*.tmp
+*.bak
+*.orig
