@@ -14,7 +14,6 @@
   <img src="https://img.shields.io/badge/FastAPI-0.103+-009688?logo=fastapi&logoColor=white" alt="FastAPI"/>
   <img src="https://img.shields.io/badge/Streamlit-1.36-FF4B4B?logo=streamlit&logoColor=white" alt="Streamlit"/>
   <img src="https://img.shields.io/badge/YOLOv8-ultralytics-00BFFF?logo=yolo&logoColor=white" alt="YOLOv8"/>
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT"/>
 </p>
 
 ---
@@ -265,9 +264,11 @@ Place any **landscape-oriented** MP4 files in the `sample-videos/` directory. Th
 
 ---
 
-## License
+## 📄 License & Attribution
 
-MIT License — see [LICENSE](LICENSE) for details.
+This project is developed as a prototype for **Smart India Hackathon (SIH26187)** under the **Ministry of Home Affairs / Sashastra Seema Bal (SSB)**.
+
+Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for full details and permissions.
 
 ---
 
