@@ -69,10 +69,14 @@ class InvestigateQuery(BaseModel):
 class ZonePayload(BaseModel):
     """Phase 5: Payload for saving operator-drawn polygon zone."""
     polygon: List[List[float]] = Field(
-        ...,
-        description="List of [x, y] pixel coordinate pairs defining the restricted zone polygon."
+        default_factory=list,
+        description="List of [x, y] pixel coordinate pairs defining the restricted zone polygon. Now optional/unused."
     )
     zone_label: str = Field(default="RESTRICTED", description="Display label for the zone.")
+
+
+class ConfigInitPayload(BaseModel):
+    camera_zones: Dict[str, str] = Field(..., description="Mapping of camera ID to surveillance mode")
 
 
 class AlertResponse(BaseModel):
@@ -118,6 +122,8 @@ ALERTS_DB: Dict[str, Dict[str, Any]] = {}
 HARD_NEGATIVE_DIR = os.path.join(os.path.dirname(__file__), "data", "hard_negatives")
 os.makedirs(HARD_NEGATIVE_DIR, exist_ok=True)
 START_TIME = time.time()
+IS_SYSTEM_CONFIGURED = False
+
 
 @app.on_event("startup")
 def on_startup():
@@ -190,7 +196,7 @@ def _launch_vision_engines() -> None:
                 camera_id=camera_id,
                 backend_url="http://127.0.0.1:8000",
                 headless=True,
-                enable_sync=False,   # sync handled by edge_queue separately
+                enable_sync=True,   # Sync enabled to send alerts to dashboard
             )
             engine.run_background()
             ACTIVE_ENGINES[camera_id] = engine
@@ -280,6 +286,40 @@ async def stream_camera(camera_id: str):
 # Phase 5: Zone Configuration Endpoints
 # ---------------------------------------------------------------------------
 
+@app.get("/api/v1/config/status")
+async def get_config_status():
+    return {"is_configured": IS_SYSTEM_CONFIGURED}
+
+@app.post("/api/v1/config/init")
+async def init_configuration(payload: ConfigInitPayload, db: Session = Depends(get_db)):
+    global IS_SYSTEM_CONFIGURED
+    
+    for cam_id, mode in payload.camera_zones.items():
+        # Update in-memory fallback store
+        ZONE_STORE[cam_id] = {"polygon": [], "zone_label": mode}
+        
+        # Propagate to active engine
+        if cam_id in ACTIVE_ENGINES:
+            ACTIVE_ENGINES[cam_id].rule_engine.set_user_zone([])
+            ACTIVE_ENGINES[cam_id].rule_engine.user_zone_mode = mode
+            
+        # Optional: Save to PostgreSQL if available
+        if db:
+            try:
+                existing = db.query(CameraZone).filter(CameraZone.camera_id == cam_id).first()
+                if existing:
+                    existing.zone_label = mode
+                    existing.updated_at = datetime.now(timezone.utc)
+                else:
+                    db.add(CameraZone(camera_id=cam_id, zone_label=mode, polygon_json=[]))
+                db.commit()
+            except Exception as e:
+                db.rollback()
+
+    IS_SYSTEM_CONFIGURED = True
+    return {"status": "configured"}
+
+
 @app.post("/api/v1/cameras/{camera_id}/zones", status_code=status.HTTP_200_OK)
 async def save_camera_zone(camera_id: str, payload: ZonePayload, db: Session = Depends(get_db)):
     """
@@ -288,8 +328,6 @@ async def save_camera_zone(camera_id: str, payload: ZonePayload, db: Session = D
     Also immediately propagates the new zone to the active engine's RuleEngine.
     """
     polygon = payload.polygon
-    if len(polygon) < 3:
-        raise HTTPException(status_code=400, detail="Zone polygon must have at least 3 points.")
 
     # Persist to DB if available
     if db:
@@ -315,7 +353,8 @@ async def save_camera_zone(camera_id: str, payload: ZonePayload, db: Session = D
 
     # Immediately propagate to active engine's RuleEngine (no 30-s poll lag)
     if camera_id in ACTIVE_ENGINES:
-        ACTIVE_ENGINES[camera_id].rule_engine.set_user_zone(polygon)
+        ACTIVE_ENGINES[camera_id].rule_engine.set_user_zone(polygon, payload.zone_label)
+        ACTIVE_ENGINES[camera_id].rule_engine.user_zone_mode = payload.zone_label
 
     return {
         "status": "zone_saved",
@@ -352,11 +391,11 @@ async def get_camera_zone(camera_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/api/v1/alerts", status_code=status.HTTP_201_CREATED)
-async def ingest_alert(payload: AlertPayload, db: Session = Depends(get_db)):
+async def receive_alert(alert_payload: AlertPayload, db: Session = Depends(get_db)):
     """
-    Ingests compressed JSON alert payloads from Edge Nodes.
+    Phase 4: Accepts HTTP POST from Edge Node.
     """
-    alert_dict = payload.model_dump()
+    alert_dict = alert_payload.model_dump()
     alert_id = alert_dict["alert_id"]
 
     # Determine is_threat if not explicitly provided
@@ -435,7 +474,7 @@ async def get_alerts(
 
 
 @app.post("/api/v1/alerts/{alert_id}/feedback")
-async def record_feedback(alert_id: str, feedback: FeedbackPayload):
+async def record_feedback(alert_id: str, feedback: FeedbackPayload, db: Session = Depends(get_db)):
     """
     Hard-Negative Operator Feedback Loop:
     Logs operator audit decisions ('CONFIRMED_BREACH' or 'FALSE_ALARM').
@@ -458,6 +497,15 @@ async def record_feedback(alert_id: str, feedback: FeedbackPayload):
     alert["feedback_by"] = feedback.operator_id
     alert["feedback_timestamp"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    if action == "FALSE_ALARM":
+        alert["priority_score"] = 0.0
+        alert["priority_level"] = "LOW"
+        alert["is_threat"] = False
+    elif action == "CONFIRMED_BREACH":
+        alert["priority_score"] = 100.0
+        alert["priority_level"] = "CRITICAL"
+        alert["is_threat"] = True
+
     # Hard-Negative Data Harvest: save crop to disk for active learning
     if action == "FALSE_ALARM" and alert.get("thumbnail_b64"):
         try:
@@ -470,6 +518,20 @@ async def record_feedback(alert_id: str, feedback: FeedbackPayload):
                 f.write(img_bytes)
         except Exception as e:
             print(f"[Backend] Error saving hard negative sample: {e}")
+
+    # Phase 4 RAG Pipeline: Update semantic context in pgvector
+    if db:
+        try:
+            db_event = db.query(AlertEvent).filter(AlertEvent.alert_id == alert_id).first()
+            if db_event:
+                # Re-translate with the new feedback status
+                db_event.raw_payload = alert
+                db_event.semantic_text = genai_copilot.translate_alert_to_text(alert)
+                db_event.embedding = genai_copilot.embed_text(db_event.semantic_text)
+                db.commit()
+        except Exception as e:
+            print(f"Failed to update alert in pgvector database: {e}")
+            db.rollback()
 
     return {
         "status": "feedback_recorded",
@@ -521,10 +583,31 @@ async def investigate_alerts(payload: InvestigateQuery, db: Session = Depends(ge
     Phase 4 GenAI Copilot endpoint. 
     Embeds natural language query and searches pgvector database for historical analysis.
     """
-    if not db:
-        raise HTTPException(status_code=503, detail="PostgreSQL database not connected or pgvector unavailable.")
-        
     try:
+        if not db:
+            # Fallback for local testing without PostgreSQL/pgvector
+            print("PostgreSQL unavailable. Using in-memory fallback for GenAI Copilot.")
+            recent_alerts = list(ALERTS_DB.values())[-15:]
+            context_docs = []
+            for a in recent_alerts:
+                sem_text = genai_copilot.translate_alert_to_text(a)
+                context_docs.append({"alert_id": a.get("alert_id"), "text": sem_text})
+                
+            context_text = "\n".join([f"[{i+1}] {doc['text']}" for i, doc in enumerate(context_docs)])
+            prompt = (
+                f"You are a tactical assistant for the IBVAP system.\n"
+                f"Based on the following historical alerts retrieved from the database, answer the officer's query.\n"
+                f"Keep your answer concise, factual, and strictly based on the provided context.\n\n"
+                f"--- Context ---\n{context_text}\n\n"
+                f"--- Query ---\n{payload.query}\n\n"
+                f"--- Response ---\n"
+            )
+            return {
+                "query": payload.query,
+                "generated_prompt": prompt,
+                "context_documents": context_docs
+            }
+            
         # Step 1: Embed the query
         query_embedding = genai_copilot.embed_text(payload.query)
         

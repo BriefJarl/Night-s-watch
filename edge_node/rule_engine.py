@@ -36,6 +36,7 @@ class RuleEngine:
         "TAMPER_DEFOCUS": 95.0,
         "TRIPWIRE_INBOUND": 90.0,
         "CRAWLING_INTRUSION": 85.0,
+        "RESTRICTED_ZONE_INTRUSION_HIGH_ALERT": 95.0,
         "RESTRICTED_ZONE_INTRUSION": 80.0,  # Phase 5: operator-drawn pixel zone
         "LOITERING": 70.0,
         "ZONE_INTRUSION": 65.0,
@@ -94,23 +95,26 @@ class RuleEngine:
         # Phase 5: Operator-drawn pixel-space restricted zone polygon.
         # Set via set_user_zone() after construction; None = no user zone active.
         self.user_zone_polygon: Optional[np.ndarray] = None
+        self.user_zone_mode: str = "Alert zone"
         self._user_zone_lock = __import__('threading').Lock()
 
         # Zone Dwell State Tracking:
         # Map: track_id -> {"zone": str, "entry_time": float, "last_time": float}
         self.track_zone_state: Dict[int, Dict[str, Any]] = {}
 
-    def set_user_zone(self, polygon_points: Optional[List[List[int]]]) -> None:
+    def set_user_zone(self, polygon_points: Optional[List[List[int]]], mode: str = "Alert zone") -> None:
         """
-        Phase 5: Sets (or clears) the operator-drawn pixel-space restricted zone.
+        Phase 5: Sets (or clears) the operator-drawn pixel-space restricted zone and mode.
         Thread-safe — called from VisionEngine's background zone-polling worker.
 
         Args:
             polygon_points: list of [x, y] integer pixel coordinates,
                             e.g. [[100,200],[300,200],[300,400],[100,400]].
                             Pass None or empty list to disable the user zone.
+            mode: Surveillance mode string.
         """
         with self._user_zone_lock:
+            self.user_zone_mode = mode
             if polygon_points and len(polygon_points) >= 3:
                 self.user_zone_polygon = np.array(polygon_points, dtype=np.float32)
             else:
@@ -274,38 +278,41 @@ class RuleEngine:
         else:
             self.track_zone_state[track_id]["last_time"] = timestamp
 
-        dwell_time = timestamp - self.track_zone_state[track_id]["entry_time"]
-        if current_zone in ["RED_ZONE", "AMBER_ZONE"] and dwell_time >= self.loiter_time_threshold:
-            active_rules.append("LOITERING")
-
-        # Rule C: Crawling / Prone Infiltration (Person class 0)
-        # Standard standing human aspect ratio (H/W) is ~ 2.0 - 3.5.
-        # Crawling / prone posture has inverted or low aspect ratio (H/W < 0.85).
         aspect_ratio = bbox_height / (bbox_width + 1e-5)
-        if class_id == 0:  # Person
-            if aspect_ratio < 0.85 and 0.05 <= velocity_mps <= 1.2:
-                active_rules.append("CRAWLING_INTRUSION")
 
-        # Rule D: Zone Intrusion (Red Zone Zero Line - world coordinates)
-        if current_zone == "RED_ZONE":
-            active_rules.append("ZONE_INTRUSION")
+        # Compute dwell time from zone state tracking
+        zone_state = self.track_zone_state.get(track_id)
+        if zone_state:
+            dwell_time = timestamp - zone_state.get("entry_time", timestamp)
+        else:
+            dwell_time = 0.0
 
-        # Rule E: Speeding / Sprinting / High-Speed Vehicle
-        if class_id == 0 and velocity_mps > self.person_speed_threshold:
-            active_rules.append("SPEEDING")
-        elif class_id in [2, 3, 5, 7] and velocity_mps > self.vehicle_speed_threshold:
-            active_rules.append("SPEEDING")
-
-        # Rule F (Phase 5): Operator-defined Restricted Zone Intrusion (pixel space).
-        # Check the bounding box bottom-center pixel (u, v) against the drawn polygon.
-        if self.is_in_user_zone(u, v):
+        # -------------------------------------------------------------
+        # STRICT SURVEILLANCE MODE RULES (Overrides legacy rules)
+        # -------------------------------------------------------------
+        mode = getattr(self, "user_zone_mode", "Alert zone")
+        if mode == "Civilian zone":
+            # Lenient mode: Ignore standard human and vehicle detection — no alert
+            if class_id in [0, 2, 3, 5, 7]:
+                return None
+        elif mode == "No Civilian zone":
+            if class_id == 0:
+                active_rules.append("RESTRICTED_ZONE_INTRUSION_HIGH_ALERT")
+        elif mode == "No vehicle zone":
+            if class_id in [2, 3, 5, 7]:
+                active_rules.append("RESTRICTED_ZONE_INTRUSION_HIGH_ALERT")
+        elif mode == "Emergency/sensitive zone":
+            active_rules.append("RESTRICTED_ZONE_INTRUSION_HIGH_ALERT")
+        else:
+            # Fallback for "Alert zone" or legacy modes
             active_rules.append("RESTRICTED_ZONE_INTRUSION")
 
-        # Determine Primary Rule by highest severity weight
+        # If the strict surveillance mode did not trigger an alert, ignore the detection.
         if not active_rules:
-            primary_rule = "NOMINAL_TRACK"
-        else:
-            primary_rule = max(active_rules, key=lambda r: self.RULE_WEIGHTS.get(r, 0.0))
+            return None
+
+        # Determine Primary Rule by highest severity weight
+        primary_rule = max(active_rules, key=lambda r: self.RULE_WEIGHTS.get(r, 0.0))
 
         # 4. Priority Scoring Function
         priority_score, priority_level = self.compute_priority_score(

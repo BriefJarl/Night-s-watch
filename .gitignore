@@ -81,8 +81,9 @@ test-results/
 # ── Hard-negative training crops (sensitive data) ─────────────
 backend/data/hard_negatives/
 
-# ── Sample / demo videos (large binary media) ─────────────────
-sample-videos/
+# ── Sample / demo videos — tracked via Git LFS ────────────────
+# sample-videos/ is NOT ignored — it's committed via LFS so clones work out-of-the-box.
+# Only the README inside is plain git; the *.mp4 files use LFS pointers.
 
 # ── Scratch / temp workspace ──────────────────────────────────
 scratch/

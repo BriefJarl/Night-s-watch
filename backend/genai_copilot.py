@@ -38,8 +38,13 @@ def translate_alert_to_text(alert: dict) -> str:
         f"moving at {velocity:.1f} m/s with a heading of {heading:.1f} degrees."
     )
     
-    if alert.get("is_threat"):
-        sentence += " It was flagged as a potential threat."
+    feedback = alert.get("feedback_status")
+    if feedback == "CONFIRMED_BREACH":
+        sentence += " This was manually CONFIRMED as a critical breach by the operator."
+    elif feedback == "FALSE_ALARM":
+        sentence += " This was flagged as a FALSE ALARM by the operator."
+    elif alert.get("is_threat"):
+        sentence += " It was flagged as a potential threat by the AI."
         
     return sentence
 

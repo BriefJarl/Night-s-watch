@@ -85,7 +85,7 @@ class VisionEngine:
         # Phase 3 Components
         self.anpr_engine = ANPREngine(use_gpu=False)
         self.edge_queue = EdgeQueue(
-            db_path="edge_alerts.db",
+            db_path=f"edge_alerts_{self.camera_id}.db",
             backend_url=self.backend_url,
             camera_id=self.camera_id,
         )
@@ -135,7 +135,8 @@ class VisionEngine:
             if resp.status_code == 200:
                 data = resp.json()
                 polygon = data.get("polygon", [])
-                self.rule_engine.set_user_zone(polygon)
+                zone_label = data.get("zone_label", "Alert zone")
+                self.rule_engine.set_user_zone(polygon, zone_label)
         except Exception:
             pass  # Network unavailable — keep existing zone
 
@@ -381,6 +382,16 @@ class VisionEngine:
                     tripwire_event=val_result["tripwire_event"],
                     timestamp=timestamp,
                 )
+
+                # Skip if rule engine filtered out the detection (Civilian zone, no rules matched)
+                if not alert_payload:
+                    box_color = (0, 255, 0)
+                    label = f"ID:{track_id} (NOMINAL)"
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 1)
+                    cv2.putText(frame, label, (x1, max(18, y1 - 8)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, box_color, 1)
+                    continue
+
                 alert_payload["camera_id"] = self.camera_id
                 if detected_plate:
                     alert_payload["license_plate"] = detected_plate
@@ -469,8 +480,15 @@ class VisionEngine:
         print(f"[VisionEngine] Running IBVAP Engine on source: {self.source} "
               f"(downscaling to {STREAM_W}×{STREAM_H}) ...")
 
+        source_fps = self.cap.get(cv2.CAP_PROP_FPS)
+        if not source_fps or source_fps <= 0:
+            source_fps = 25.0
+        frame_delay = 1.0 / source_fps
+
         try:
             while True:
+                # Limit read speed to actual video FPS to prevent buffer bloat
+                time.sleep(frame_delay)
                 ret, frame = self.cap.read()
 
                 # Phase 5: Loop video files indefinitely — reset on end-of-file.

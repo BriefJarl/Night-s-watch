@@ -60,7 +60,7 @@ st.markdown(
     .card-high { border-left-color: #f97316; }
     .card-medium { border-left-color: #eab308; }
     .card-low { border-left-color: #22c55e; }
-    .compressed-img { object-fit: cover; width: 100%; max-height: 160px; border-radius: 8px; }
+    .compressed-img { object-fit: cover; width: 100%; max-height: 160px; border-radius: 8px; } /* width controlled inline */
     .badge { padding: 6px 12px; border-radius: 6px; font-weight: 700; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
     .badge-critical { background: #7f1d1d; color: #fecaca; border: 1px solid #ef4444; box-shadow: 0 0 12px rgba(239, 68, 68, 0.4); }
     .badge-high { background: #7c2d12; color: #fed7aa; border: 1px solid #f97316; box-shadow: 0 0 12px rgba(249, 115, 22, 0.4); }
@@ -179,7 +179,7 @@ def submit_feedback(url: str, alert_id: str, action: str, notes: str):
     except Exception as e:
         st.error(f"Failed to submit feedback: {e}")
 
-def render_alert_card(alert: Dict, url: str):
+def render_alert_card(alert: Dict, url: str, key_prefix: str = ""):
     """Renders a single alert card with telemetry and feedback buttons."""
     alert_id = alert["alert_id"]
     priority_level = alert.get("priority_level", "LOW")
@@ -215,7 +215,9 @@ def render_alert_card(alert: Dict, url: str):
         unsafe_allow_html=True
     )
     if thumb and thumb.startswith("data:image"):
-        st.markdown(f'<img src="{thumb}" class="compressed-img">', unsafe_allow_html=True)
+        with st.expander("🔍 View Full Image"):
+            st.image(thumb, use_container_width=True)
+        st.markdown(f'<img src="{thumb}" class="compressed-img" style="max-width:380px;"/>', unsafe_allow_html=True)
     else:
         st.markdown(
             """<div style="background: rgba(0,0,0,0.4); height: 120px; display: flex; align-items: center;
@@ -241,12 +243,81 @@ def render_alert_card(alert: Dict, url: str):
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
     btn1, btn2 = st.columns(2)
     with btn1:
-        if st.button("Dispatch", key=f"conf_{alert_id}", help="Confirm threat and dispatch units"):
+        if st.button("Dispatch", key=f"{key_prefix}conf_{alert_id}", help="Confirm threat and dispatch units"):
             submit_feedback(url, alert_id, "CONFIRMED_BREACH", "Threat confirmed.")
     with btn2:
-        if st.button("Mark False", key=f"false_{alert_id}", help="Flag as false alarm for retraining"):
+        if st.button("Mark False", key=f"{key_prefix}false_{alert_id}", help="Flag as false alarm for retraining"):
             submit_feedback(url, alert_id, "FALSE_ALARM", "Flagged.")
     st.markdown('</div>', unsafe_allow_html=True)
+
+
+# --- Setup Wizard / System Configuration ---
+def fetch_config_status(url):
+    try:
+        r = requests.get(f"{url}/api/v1/config/status", timeout=2.0)
+        if r.status_code == 200:
+            return r.json().get("is_configured", False)
+    except Exception:
+        pass
+    # If backend is down or not responding properly, assume True so we can show the Offline KPI later
+    return True
+
+is_configured = fetch_config_status(backend_url)
+
+if not is_configured:
+    st.markdown(
+        """
+        <div style="text-align: center; margin-top: 50px;">
+            <h1 style="font-size: 32px; font-weight: 800; color: #f8fafc;">
+                <i class="fa-solid fa-shield-halved" style="color: #38bdf8; margin-right: 12px;"></i>
+                SYSTEM INITIALIZATION
+            </h1>
+            <p style="color: #94a3b8; font-size: 16px;">The Intelligent Border Video Analytics Platform requires initial configuration.</p>
+        </div>
+        """, unsafe_allow_html=True
+    )
+    st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin: 30px 0;'>", unsafe_allow_html=True)
+    st.markdown("### <i class='fa-solid fa-camera'></i> Camera Surveillance Zones", unsafe_allow_html=True)
+    
+    cameras = fetch_cameras(backend_url)
+    if not cameras:
+        st.info("Waiting for edge nodes and cameras to connect...")
+        time.sleep(2)
+        st.rerun()
+        
+    config_state = {}
+    with st.form("initial_config_form"):
+        st.markdown("<p style='color: #cbd5e1; font-size: 14px; margin-bottom: 20px;'>Assign a surveillance mode to each connected camera.</p>", unsafe_allow_html=True)
+        
+        cols = st.columns(3)
+        for i, cam_dict in enumerate(cameras):
+            cam_id = cam_dict.get("camera_id", f"CAM-{i}")
+            with cols[i % 3]:
+                # Default to 'Civilian zone' (index 1) as requested
+                mode = st.selectbox(
+                    f"{cam_id}",
+                    ["Alert zone", "Civilian zone", "No Civilian zone", "No vehicle zone", "Emergency/sensitive zone"],
+                    index=1,
+                    key=f"init_{cam_id}"
+                )
+                config_state[cam_id] = mode
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        submitted = st.form_submit_button("Save Configuration & Start System", type="primary", use_container_width=True)
+        
+        if submitted:
+            try:
+                r = requests.post(f"{backend_url}/api/v1/config/init", json={"camera_zones": config_state}, timeout=5.0)
+                if r.status_code == 200:
+                    st.success("Configuration saved! Booting detection pipelines...")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f"Failed to save configuration: {r.text}")
+            except Exception as e:
+                st.error(f"Error connecting to backend: {e}")
+                
+    st.stop()
 
 
 # --- Main UI ---
@@ -291,11 +362,12 @@ st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
 # ─────────────────────────────────────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────────────────────────────────────
-tab_live, tab_map, tab_queue, tab_config = st.tabs([
-    "\U0001f4f9  Live Feeds",
-    "\U0001f5fa\ufe0f  Tactical Map",
-    "\U0001f6e1\ufe0f  Alert Queue",
-    "\u2699\ufe0f  Camera Config",
+tab_live, tab_map, tab_queue, tab_config, tab_ai = st.tabs([
+    "📹  Live Feeds",
+    "🗺️  Tactical Map",
+    "🛡️  Alert Queue",
+    "⚙️  Camera Config",
+    "🤖  AI Reports",
 ])
 
 
@@ -308,6 +380,9 @@ with tab_live:
         "AI-processed MJPEG feeds &bull; Zero controls &bull; Continuous loop &bull; Detection-gated pipeline active</p>",
         unsafe_allow_html=True,
     )
+
+    grid_size_option = st.selectbox("Grid Layout", ["1x1", "2x2", "3x3", "4x4", "5x5", "10x10"], index=1)
+    COLS = int(grid_size_option.split("x")[0])
 
     cameras = fetch_cameras(backend_url)
 
@@ -324,7 +399,6 @@ with tab_live:
             unsafe_allow_html=True,
         )
     else:
-        COLS = 2
         rows = [cameras[i:i + COLS] for i in range(0, len(cameras), COLS)]
         for row in rows:
             grid_cols = st.columns(COLS, gap="small")
@@ -410,7 +484,7 @@ with tab_map:
         else:
             with st.container(height=700, border=True):
                 for alert in alerts:
-                    render_alert_card(alert, backend_url)
+                    render_alert_card(alert, backend_url, key_prefix="map_")
 
 
 # ─── TAB 3: ALERT QUEUE ──────────────────────────────────────────────────────
@@ -436,17 +510,17 @@ with tab_queue:
         mid = (len(alerts) + 1) // 2
         for idx, alert in enumerate(alerts):
             with (q_col1 if idx < mid else q_col2):
-                render_alert_card(alert, backend_url)
+                render_alert_card(alert, backend_url, key_prefix="queue_")
 
 
 # ─── TAB 4: CAMERA CONFIG ────────────────────────────────────────────────────
 with tab_config:
     st.markdown(
         "<h2 style='font-size: 22px; font-weight: 700; margin-bottom: 4px;'>"
-        "<i class='fa-solid fa-draw-polygon'></i> Camera Zone Configuration</h2>"
+        "<i class='fa-solid fa-camera'></i> Camera Operational Mode</h2>"
         "<p style='color: #94a3b8; font-size: 13px; margin-bottom: 20px;'>"
-        "Draw a restricted zone polygon on the camera reference frame. "
-        "Detected objects entering this zone trigger a <code>RESTRICTED_ZONE_INTRUSION</code> alert (weight: 80.0).</p>",
+        "Set the camera-wide surveillance mode. "
+        "Detected objects across the entire frame will be evaluated according to this mode.</p>",
         unsafe_allow_html=True,
     )
 
@@ -463,170 +537,87 @@ with tab_config:
             help="Choose the camera feed you wish to assign a restricted zone to.",
         )
 
-        canvas_available = False
-        try:
-            from streamlit_drawable_canvas import st_canvas
-            canvas_available = True
-        except ImportError:
-            pass
+        surveillance_mode = st.selectbox(
+            "Surveillance Mode",
+            ["Alert zone", "Civilian zone", "No Civilian zone", "No vehicle zone", "Emergency/sensitive zone"],
+            help="Configure what triggers a zone intrusion alert."
+        )
 
         st.markdown("<hr style='border-color: rgba(255,255,255,0.08); margin: 16px 0;'>", unsafe_allow_html=True)
 
-        if canvas_available:
-            # Grab reference frame from stream
-            snapshot_b64 = None
+        if st.button("\U0001f4be Save Configuration", key=f"save_config_{selected_cam}", use_container_width=True):
             try:
-                import urllib.request
-                stream_url = f"{backend_url}/api/v1/stream/{selected_cam}"
-                with urllib.request.urlopen(stream_url, timeout=3) as resp:
-                    raw = resp.read(400_000)
-                start = raw.find(b"\xff\xd8")
-                end = raw.find(b"\xff\xd9", start) + 2
-                if start != -1 and end > start:
-                    snapshot_b64 = base64.b64encode(raw[start:end]).decode()
-            except Exception:
-                snapshot_b64 = None
-
-            col_canvas, col_info = st.columns([3, 1], gap="medium")
-
-            with col_canvas:
-                st.markdown(
-                    f"<div style='font-size: 12px; color: #94a3b8; margin-bottom: 8px; font-weight: 600;'>"
-                    f"<i class='fa-solid fa-pen-ruler'></i> &nbsp;Draw polygon on: <span style='color:#38bdf8'>{selected_cam}</span></div>",
-                    unsafe_allow_html=True,
+                resp = requests.post(
+                    f"{backend_url}/api/v1/cameras/{selected_cam}/zones",
+                    json={"polygon": [], "zone_label": surveillance_mode},
+                    timeout=3.0,
                 )
-                CANVAS_W, CANVAS_H = 720, 405
-                bg_image = None
-                if snapshot_b64:
+                if resp.status_code == 200:
+                    st.success(f"✅ Surveillance mode '{surveillance_mode}' saved for **{selected_cam}**. Engine updated immediately.")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f"Backend error: {resp.text}")
+            except Exception as e:
+                st.error(f"Failed to save config: {e}")
+
+
+
+# ─── TAB 5: AI REPORTS ───────────────────────────────────────────────────────
+with tab_ai:
+    st.markdown(
+        "<h2 style='font-size: 22px; font-weight: 700; margin-bottom: 4px;'>"
+        "<i class='fa-solid fa-robot'></i> AI Copilot & Reports</h2>"
+        "<p style='color: #94a3b8; font-size: 13px; margin-bottom: 20px;'>"
+        "Natural language querying of historical border incursions using Local LLM & RAG.</p>",
+        unsafe_allow_html=True,
+    )
+
+    query = st.text_input("Ask a question about recent alerts (e.g., 'Summarize incursions on CAM-BOP-01'):", value="Give me a daily incident report for CAM-BOP-01.")
+
+    if st.button("Generate AI Report", type="primary", use_container_width=True):
+        with st.spinner("Retrieving historical context and generating report..."):
+            try:
+                # 1. Ask Backend for Context
+                r = requests.post(f"{backend_url}/api/v1/investigate", json={"query": query}, timeout=5.0)
+                if r.status_code == 200:
+                    data = r.json()
+                    generated_prompt = data.get("generated_prompt", "")
+
+                    # 2. Ask Local Ollama
                     try:
-                        from PIL import Image
-                        import io
-                        img_bytes = base64.b64decode(snapshot_b64)
-                        bg_image = Image.open(io.BytesIO(img_bytes)).resize((CANVAS_W, CANVAS_H))
-                    except Exception:
-                        bg_image = None
+                        ollama_url = "http://localhost:11434/api/generate"
+                        ollama_payload = {
+                            "model": "llama3", # default to llama3
+                            "prompt": generated_prompt,
+                            "stream": False
+                        }
+                        ollama_r = requests.post(ollama_url, json=ollama_payload, timeout=20.0)
 
-                canvas_result = st_canvas(
-                    fill_color="rgba(239, 68, 68, 0.20)",
-                    stroke_width=2,
-                    stroke_color="#ef4444",
-                    background_color="#0f172a",
-                    background_image=bg_image,
-                    update_streamlit=True,
-                    height=CANVAS_H,
-                    width=CANVAS_W,
-                    drawing_mode="polygon",
-                    point_display_radius=4,
-                    key=f"zone_canvas_{selected_cam}",
-                )
-
-            with col_info:
-                st.markdown(
-                    """<div class="zone-preview-box">
-                        <div style="font-size: 12px; font-weight: 700; color: #38bdf8; margin-bottom: 10px;">
-                            <i class="fa-solid fa-circle-info"></i> HOW TO USE
-                        </div>
-                        <ol style="font-size: 12px; color: #94a3b8; line-height: 2.0; padding-left: 16px; margin: 0;">
-                            <li>Click to place polygon vertices</li>
-                            <li>Double-click to close shape</li>
-                            <li>Click <b>Save Zone</b> below</li>
-                        </ol>
-                        <hr style="border-color: rgba(255,255,255,0.08); margin: 12px 0;">
-                        <div style="font-size: 11px; color: #64748b;">
-                            Zone enforced in <b>pixel space</b>.<br>
-                            Rule: <code style="color:#f87171;">RESTRICTED_ZONE_INTRUSION</code><br>
-                            Weight: <b>80.0</b> &bull; Priority &ge; HIGH
-                        </div>
-                    </div>""",
-                    unsafe_allow_html=True,
-                )
-                existing_polygon = fetch_zone(backend_url, selected_cam)
-                if existing_polygon:
-                    st.markdown(
-                        f"""<div class="zone-preview-box" style="margin-top: 12px;">
-                            <div style="font-size: 11px; font-weight: 700; color: #22c55e; margin-bottom: 8px;">
-                                <i class="fa-solid fa-circle-check"></i> ACTIVE ZONE
-                            </div>
-                            <div style="font-size: 11px; color: #94a3b8;">{len(existing_polygon)} vertices configured</div>
-                        </div>""",
-                        unsafe_allow_html=True,
-                    )
-
-            st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
-            save_col, clear_col, _ = st.columns([1, 1, 3])
-
-            with save_col:
-                if st.button("\U0001f4be Save Zone", key=f"save_zone_{selected_cam}", use_container_width=True):
-                    polygon_points = []
-                    if canvas_result.json_data:
-                        for obj in canvas_result.json_data.get("objects", []):
-                            if obj.get("type") == "path":
-                                for cmd in obj.get("path", []):
-                                    if len(cmd) >= 3 and cmd[0] in ("M", "L"):
-                                        polygon_points.append([float(cmd[1]), float(cmd[2])])
-                    if len(polygon_points) < 3:
-                        st.error("\u274c Please draw a polygon with at least 3 vertices.")
-                    else:
-                        try:
-                            resp = requests.post(
-                                f"{backend_url}/api/v1/cameras/{selected_cam}/zones",
-                                json={"polygon": polygon_points, "zone_label": "RESTRICTED"},
-                                timeout=3.0,
-                            )
-                            if resp.status_code == 200:
-                                data = resp.json()
-                                st.success(f"\u2705 Zone saved for **{selected_cam}** \u2014 {data.get('point_count', len(polygon_points))} vertices. Engine updated immediately.")
-                                st.rerun()
-                            else:
-                                st.error(f"Backend error: {resp.text}")
-                        except Exception as e:
-                            st.error(f"Failed to save zone: {e}")
-
-            with clear_col:
-                if st.button("\U0001f5d1\ufe0f Clear Zone", key=f"clear_zone_{selected_cam}", use_container_width=True):
-                    try:
-                        resp = requests.post(
-                            f"{backend_url}/api/v1/cameras/{selected_cam}/zones",
-                            json={"polygon": [], "zone_label": "NONE"},
-                            timeout=3.0,
-                        )
-                        if resp.status_code in (200, 400):
-                            st.info(f"Zone cleared for {selected_cam}.")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed to clear zone: {e}")
-
-        else:
-            # Fallback: manual JSON entry
-            st.warning(
-                "\u26a0\ufe0f `streamlit-drawable-canvas` not installed. "
-                "Run `pip install streamlit-drawable-canvas` for the interactive editor. "
-                "Using manual coordinate entry below.",
-            )
-            st.markdown("<p style='font-size: 13px; color: #94a3b8; margin-bottom: 8px;'>Enter polygon vertices as <code>[[x, y], ...]</code> pixel coordinates:</p>", unsafe_allow_html=True)
-            existing_polygon = fetch_zone(backend_url, selected_cam)
-            default_json = json.dumps(existing_polygon, indent=2) if existing_polygon else "[[100, 100], [400, 100], [400, 300], [100, 300]]"
-            zone_json = st.text_area("Zone Polygon (JSON)", value=default_json, height=200, key=f"zone_json_{selected_cam}")
-            if st.button("\U0001f4be Save Zone", key=f"save_zone_json_{selected_cam}"):
-                try:
-                    polygon_points = json.loads(zone_json)
-                    if len(polygon_points) < 3:
-                        st.error("Polygon must have at least 3 points.")
-                    else:
-                        resp = requests.post(
-                            f"{backend_url}/api/v1/cameras/{selected_cam}/zones",
-                            json={"polygon": polygon_points, "zone_label": "RESTRICTED"},
-                            timeout=3.0,
-                        )
-                        if resp.status_code == 200:
-                            st.success(f"\u2705 Zone saved for **{selected_cam}**.")
+                        if ollama_r.status_code == 200:
+                            report_text = ollama_r.json().get("response", "")
+                            st.markdown("### Generated Report")
+                            st.markdown(f"<div style='background: rgba(15,23,42,0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 20px; color: #e2e8f0; line-height: 1.6;'>{report_text}</div>", unsafe_allow_html=True)
                         else:
-                            st.error(f"Backend error: {resp.text}")
-                except json.JSONDecodeError as e:
-                    st.error(f"Invalid JSON: {e}")
-                except Exception as e:
-                    st.error(f"Failed to save zone: {e}")
+                            st.warning(f"Local LLM (Ollama) error: {ollama_r.status_code}. Make sure Ollama is running on localhost:11434.")
+                            st.markdown("#### Prompt that would have been sent:")
+                            st.text(generated_prompt)
 
+                    except requests.exceptions.RequestException:
+                        st.warning("Could not connect to Local LLM at `http://localhost:11434`. Ensure Ollama is running.")
+                        st.markdown("#### RAG Context & Prompt:")
+                        st.text(generated_prompt)
+                else:
+                    st.error(f"Backend RAG API error: {r.text}")
+            except Exception as e:
+                st.error(f"Error querying backend: {e}")
+    else:
+        st.markdown(
+            """<div style="background: rgba(15,23,42,0.4); border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px; padding: 48px; text-align: center; color: #64748b; margin-top: 20px;">
+                <div style="font-size: 32px; margin-bottom: 12px;"><i class="fa-solid fa-file-invoice"></i></div>
+                <div style="font-weight: 600; font-size: 15px;">Report generator ready. Enter a query and click generate.</div></div>""",
+            unsafe_allow_html=True,
+        )
 
 # --- Auto Refresh ---
 if auto_refresh:

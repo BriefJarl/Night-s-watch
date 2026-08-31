@@ -1,133 +1,277 @@
-# Night's Watch — Intelligent Border Video Analytics Platform (IBVAP)
+<p align="center">
+  <img src="https://cdn-icons-png.flaticon.com/128/2092/2092661.png" width="80" alt="IBVAP Logo"/>
+</p>
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.103+-009688.svg)](https://fastapi.tiangolo.com)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-FF4B4B.svg)](https://streamlit.io/)
-[![YOLOv8](https://img.shields.io/badge/YOLO-v8n-yellow.svg)](https://ultralytics.com)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-336791.svg)](https://github.com/pgvector/pgvector)
-[![SIH26187](https://img.shields.io/badge/SIH-26187-orange.svg)]()
+<h1 align="center">Night's Watch — IBVAP</h1>
+<h3 align="center">Intelligent Border Video Analytics Platform</h3>
+<p align="center">
+  <strong>SIH26187 · Ministry of Home Affairs / SSB · Smart Automation</strong><br>
+  Edge-compatible AI vision engine for real-time border surveillance on standard CCTV infrastructure.
+</p>
 
-> **Smart Automation (Edge-Compatible AI Vision Engine) developed for the Ministry of Home Affairs / Sashastra Seema Bal (SSB) under SIH26187.**
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.10+-blue?logo=python&logoColor=white" alt="Python 3.10+"/>
+  <img src="https://img.shields.io/badge/FastAPI-0.103+-009688?logo=fastapi&logoColor=white" alt="FastAPI"/>
+  <img src="https://img.shields.io/badge/Streamlit-1.36-FF4B4B?logo=streamlit&logoColor=white" alt="Streamlit"/>
+  <img src="https://img.shields.io/badge/YOLOv8-ultralytics-00BFFF?logo=yolo&logoColor=white" alt="YOLOv8"/>
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT"/>
+</p>
 
-## 📖 Overview
+---
 
-Continuous human observation of standard-definition CCTV infrastructure at remote border outposts causes severe cognitive fatigue. Furthermore, heavy GPU clusters cannot be deployed at these remote borders due to extreme costs, thermal limits, power, and network constraints.
+## Overview
 
-**Night's Watch** is a software-defined intelligence layer designed specifically to solve this problem. It is a highly optimised, edge-compatible Computer Vision pipeline that uses **software-defined triage (detection-gated pipelines)** and **Semantic Compression (JSON over raw video)** to operate efficiently on low-power edge nodes while guaranteeing data resiliency over unreliable network links.
+**Night's Watch (IBVAP)** is a software-defined intelligence layer for border surveillance that runs on existing standard-definition CCTV infrastructure. It uses a **3-stage detection-gated pipeline** (MOG2 → YOLOv8n → DeepSORT) to minimize compute on edge hardware while maximizing threat detection accuracy.
 
-## ✨ Core Features
+### Key Features
 
-*   **3-Stage Detection-Gated Pipeline:** Conserves compute by triggering heavy neural networks (YOLOv8/RT-DETR) only when zero-cost motion (MOG2) is detected. Objects are then handed off to a mathematical tracker (DeepSORT) to eliminate per-frame AI overhead.
-*   **4-Layer False Alarm Suppression Stack:** Employs static masking, track confirmation, homography geometric gating (size-vs-depth), and an operator hard-negative loop to filter out 98% of nuisance alerts.
-*   **Semantic Compression & Store-and-Forward:** Converts events into 2-8KB JSON payloads instead of streaming heavy H.264 video. Integrates a local SQLite edge queue for 100% data retention during satellite link outages, syncing asynchronously with the central cloud.
-*   **ANPR & Analytics:** Bypasses edge hardware limits with software perspective-warping and multi-frame statistical voting for Indian standard license plates.
-*   **GenAI RAG Copilot:** Embeds JSON alert payloads as semantic text into a PostgreSQL database with `pgvector`. Operators can query historical intrusions using natural language (e.g., *"Show me all vehicles near the red zone last night"*).
-*   **Ranked Operator Dashboard:** A Streamlit front-end featuring a dynamic Folium MapLibre view, priority-ranked alert queue, and zero-latency MJPEG live CCTV walls.
+| Feature | Description |
+|---------|-------------|
+| 🎯 **3-Stage Gated Pipeline** | MOG2 motion gate → YOLOv8n classification → DeepSORT persistent tracking |
+| 🛡️ **4-Layer False Alarm Suppression** | Static masks, track confirmation (≥8 frames + ≥2m), homography geometric gate, hard-negative feedback loop |
+| 🗺️ **Ground Homography** | Pixel → real-world GPS coordinate mapping via calibrated 3×3 homography matrix |
+| 📹 **MJPEG Streaming Wall** | Zero-latency live feeds with AI-annotated bounding boxes in browser |
+| 🔍 **ANPR Engine** | Perspective warp + EasyOCR + Indian plate regex + multi-frame character voting |
+| 📊 **Ranked Alert Dashboard** | Priority-scored threat queue with glassmorphism UI (Streamlit) |
+| 🗺️ **Tactical Map** | Folium-based geospatial plotting of incursions |
+| 🤖 **AI Copilot (RAG)** | Natural language querying of historical alerts via sentence-transformers embeddings |
+| 💾 **Store-and-Forward** | SQLite edge queue with async sync — zero data loss on network failure |
+| ⚙️ **Zone Configuration** | Per-camera surveillance modes: Alert, Civilian, No Civilian, No Vehicle, Emergency |
 
-## 🏗️ System Architecture & Hardware Tiers
+---
 
-### Hardware Deployment Tiers (Optimised for Tiers 1 & 2)
+## Architecture
 
-| Operational Tier | Target Deployment Location | Hardware Specification | Processing Capacity |
-| :--- | :--- | :--- | :--- |
-| **Tier 1 (Tactical Edge)** | Remote Patrol Posts | Raspberry Pi 5 + Hailo-8L AI NPU | 2-4 RTSP Streams |
-| **Tier 2 (Standard BOP)** | Standard Border Out Posts | NVIDIA Jetson Orin Nano Super | 8-12 RTSP Streams |
-| **Tier 3 (Check Post Hub)** | Strategic Highways | Mini-PC with iGPU + OpenVINO | 16-24 RTSP Streams |
-| **Tier 4 (Central Command)**| Regional Headquarters | Server with T4/A10 GPU Cluster | 100+ Streams |
-
-### Directory Structure
-
-```text
-Night's Watch/
-├── backend/                  # Cloud infrastructure (FastAPI)
-│   ├── main.py               # REST API & async routing via Uvicorn
-│   ├── database.py           # PostgreSQL + pgvector schema
-│   └── genai_copilot.py      # LLM embedding and semantic search
-├── edge_node/                # Remote node AI analytics (Python/OpenCV)
-│   ├── vision_engine.py      # 3-stage gated pipeline & RTSP ingestion
-│   ├── false_alarm_filter.py # Suppression stack & Homography math
-│   ├── anpr_engine.py        # Perspective warp & OCR voting
-│   └── edge_queue.py         # SQLite store-and-forward worker
-├── frontend/                 # Operator Dashboard
-│   └── app.py                # Streamlit UI with Folium/MapLibre mapping
-├── tests/                    # Evaluation & Quality Assurance
-├── .agents/                  # Autonomous system rules and knowledge
-├── ARCHITECTURE.md           # Deep-dive system documentation
-├── docker-compose.yml        # Container orchestration
-└── requirements.txt          # Python dependencies
+```
+┌────────────────────────────────────────────────────────────────┐
+│                      CENTRAL COMMAND (Tier 4)                  │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐   │
+│  │   FastAPI     │  │  PostgreSQL  │  │   Streamlit        │   │
+│  │   Backend     │  │  + pgvector  │  │   Dashboard        │   │
+│  │  (main.py)    │  │ (database.py)│  │   (app.py)         │   │
+│  └──────┬───────┘  └──────────────┘  └────────────────────┘   │
+│         │ REST API + MJPEG Streaming                           │
+├─────────┼──────────────────────────────────────────────────────┤
+│         │              EDGE NODE (Tier 1-3)                    │
+│  ┌──────┴───────┐  ┌──────────────┐  ┌────────────────────┐   │
+│  │ VisionEngine │  │ FalseAlarm   │  │   EdgeQueue        │   │
+│  │ (3-stage AI) │→ │ Filter       │→ │   (SQLite S&F)     │   │
+│  │ MOG2→YOLO→   │  │ (Homography) │  │                    │   │
+│  │ DeepSORT     │  │              │  │ ┌────────────────┐ │   │
+│  └──────────────┘  └──────────────┘  │ │ ANPR Engine    │ │   │
+│                                       │ │ (EasyOCR)      │ │   │
+│                                       │ └────────────────┘ │   │
+│                                       └────────────────────┘   │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-## 🚀 Getting Started
+---
+
+## Project Structure
+
+```
+Night-s-watch/
+├── backend/
+│   ├── main.py              # FastAPI central command server
+│   ├── database.py          # PostgreSQL/pgvector schema (with SQLite fallback)
+│   └── genai_copilot.py     # RAG embedding & prompt generation
+├── edge_node/
+│   ├── vision_engine.py     # 3-stage detection-gated pipeline
+│   ├── false_alarm_filter.py # Homography + 4-layer suppression stack
+│   ├── rule_engine.py       # Zone geofencing + behavioral rules + scoring
+│   ├── anpr_engine.py       # License plate recognition with multi-frame voting
+│   └── edge_queue.py        # SQLite store-and-forward sync worker
+├── frontend/
+│   └── app.py               # Streamlit tactical command dashboard
+├── sample-videos/           # Demo surveillance clips (Git LFS)
+├── requirements.txt
+├── docker-compose.yml
+└── README.md
+```
+
+---
+
+## Quick Start (Clone & Run)
 
 ### Prerequisites
 
-*   **Python:** Version 3.10 or higher.
-*   **Docker & Docker Compose:** Required to run the PostgreSQL database with `pgvector` locally.
+- **Python 3.10+** (tested on 3.12 and 3.14)
+- **Git LFS** (for pulling sample videos)
+- ~2 GB disk space (videos + model weights)
+- **Optional:** PostgreSQL with pgvector (falls back to in-memory storage)
+- **Optional:** [Ollama](https://ollama.ai) with `llama3` for AI Reports
 
-### 1. Database Setup (Cloud Server)
-
-Ensure Docker is running, then spin up the `pgvector` database:
+### 1. Clone the Repository
 
 ```bash
-docker-compose up -d
+# Install Git LFS if you haven't
+git lfs install
+
+# Clone with LFS — this pulls the sample videos automatically
+git clone https://github.com/BriefJarl/Night-s-watch.git
+cd Night-s-watch
 ```
 
-### 2. Environment & Dependencies
+> **Note:** The first clone will download ~830 MB of sample surveillance videos via Git LFS. If you want to skip them initially, use `GIT_LFS_SKIP_SMUDGE=1 git clone ...` and run `git lfs pull` later.
 
-Create a virtual environment and install the required packages:
+### 2. Install Dependencies
 
 ```bash
-python -m venv .venv
-# Activate the environment:
-# Windows:
-.venv\Scripts\activate
-# Linux/Mac:
-# source .venv/bin/activate
-
 pip install -r requirements.txt
 ```
 
-*(Note: YOLOv8 model weights will be downloaded automatically on the first run).*
+> **GPU Users (Optional):** If you have an NVIDIA GPU, install PyTorch with CUDA support first:
+> ```bash
+> pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+> ```
 
-### 3. Running the Stack
+### 3. Start the Backend
 
-You will need to open three separate terminal windows (ensure the virtual environment is activated in each).
-
-**Terminal 1: Start the Central Backend (FastAPI)**
 ```bash
-uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+cd backend
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-**Terminal 2: Start the Edge Node Simulator**
-```bash
-# This will launch the vision_engine and begin processing sample-videos/
-python -c "from backend.main import _launch_vision_engines; _launch_vision_engines()"
+Wait for the startup to complete. You'll see:
 ```
-*(In a real production environment, edge nodes run physically detached from the backend server).*
-
-**Terminal 3: Start the Operator Dashboard (Streamlit)**
-```bash
-streamlit run frontend/app.py
+Loading embedding model: sentence-transformers/all-MiniLM-L6-v2...
+Embedding model loaded successfully.
+[Backend] Launching engine CAM-BOP-01 on '...'...
+[Backend] Phase 5: 6 camera engine(s) active.
+INFO:     Application startup complete.
 ```
 
-## 📡 API Reference (Backend)
+> **First Run:** YOLOv8 will automatically download `yolov8n.pt` (~6 MB) on first launch. The sentence-transformers model (~90 MB) is also auto-downloaded.
 
-The Central Backend provides the following core endpoints (view full Swagger UI at `http://localhost:8000/docs`):
+### 4. Start the Frontend (New Terminal)
 
-*   `POST /api/v1/alerts`: Ingests JSON alert payloads from edge nodes (Store-and-Forward sync).
-*   `GET /api/v1/stream/{camera_id}`: Provides MJPEG video streaming for the live CCTV dashboard wall.
-*   `POST /api/v1/investigate`: GenAI RAG copilot endpoint accepting natural language queries to search the `pgvector` DB.
-*   `POST /api/v1/alerts/{alert_id}/feedback`: Hard-negative feedback loop endpoint.
-*   `GET /api/v1/cameras/{camera_id}/zones`: Syncs operator-drawn geofence polygons back to the edge node.
+```bash
+# From the project root
+python -m streamlit run frontend/app.py
+```
 
-## 👥 Meet the Team (Prashant_Sahyog)
+### 5. Open the Dashboard
 
-*   **Nitish (AI/ML Lead):** Architect of the 3-stage detection-gated pipeline, YOLOv8/RT-DETR schemas, DeepSORT tracking, and the RAG architecture.
-*   **Devansh (Optimization):** Compiles PyTorch models into ONNX/OpenVINO to minimize edge latency; manages memory constraints for the GenAI module.
-*   **Prashant (Frontend Lead):** Developer of the Streamlit dashboard, Folium mapping, and ranked-alert queue to minimize cognitive overload.
-*   **Bhumika (Backend Lead):** Designer of the end-to-end FastAPI infrastructure, async routing, and legacy system integrations.
-*   **Reddy (Quality Engineering):** Architect of PostgreSQL/pgvector schemas, SQLite edge queues, and validates GPU/CPU frame drop rates.
-*   **Garima (DevOps):** Manages RTSP ingestion, evaluation datasets (LLVIP, VisDrone, UA-DETRAC), and Docker containerization.
+Navigate to **http://localhost:8501** in your browser.
+
+1. You'll see the **System Initialization** wizard
+2. Assign a surveillance zone to each camera (defaults to "Civilian zone")
+3. Click **Save Configuration & Start System**
+4. The dashboard will start showing live MJPEG feeds, alerts, and threat detections
 
 ---
-*Developed with purpose for a safer, smarter border.*
+
+## Surveillance Modes
+
+| Mode | Behavior |
+|------|----------|
+| **Civilian zone** | Lenient — ignores all person/vehicle detections |
+| **Alert zone** | Standard — reports all confirmed detections as medium-priority |
+| **No Civilian zone** | Restricted — flags any **person** as HIGH ALERT intrusion |
+| **No vehicle zone** | Restricted — flags any **vehicle** as HIGH ALERT intrusion |
+| **Emergency/sensitive zone** | Maximum security — flags **everything** as HIGH ALERT |
+
+Change modes anytime in the **⚙️ Camera Config** tab — takes effect immediately.
+
+---
+
+## Dashboard Tabs
+
+| Tab | Description |
+|-----|-------------|
+| 📹 **Live Feeds** | MJPEG surveillance wall (1×1 to 10×10 grid) with AI-annotated bounding boxes |
+| 🗺️ **Tactical Map** | Folium dark-mode map with threat markers plotted from homography coordinates |
+| 🛡️ **Alert Queue** | Priority-ranked alert cards with thumbnails, telemetry, and Dispatch/False Alarm buttons |
+| ⚙️ **Camera Config** | Per-camera surveillance mode selector |
+| 🤖 **AI Reports** | Natural language querying of historical alerts via RAG (requires Ollama for full LLM responses) |
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v1/health` | System health check |
+| `GET` | `/api/v1/cameras` | List active camera streams |
+| `GET` | `/api/v1/stream/{camera_id}` | MJPEG live stream |
+| `GET` | `/api/v1/stats` | Dashboard KPI statistics |
+| `GET` | `/api/v1/alerts` | Filtered alert list (priority, camera, status) |
+| `POST` | `/api/v1/alerts` | Ingest alert from edge node |
+| `POST` | `/api/v1/alerts/{id}/feedback` | Operator feedback (Confirm/False Alarm) |
+| `GET` | `/api/v1/cameras/{id}/zones` | Get camera zone config |
+| `POST` | `/api/v1/cameras/{id}/zones` | Set camera zone config |
+| `GET` | `/api/v1/config/status` | Check if system is configured |
+| `POST` | `/api/v1/config/init` | Initial system configuration |
+| `POST` | `/api/v1/investigate` | AI Copilot RAG query |
+
+---
+
+## Optional: AI Reports with Ollama
+
+To enable full AI-generated reports:
+
+```bash
+# Install Ollama (https://ollama.ai)
+ollama pull llama3
+ollama serve
+```
+
+The AI Reports tab will automatically detect Ollama at `localhost:11434` and generate incident summaries.
+
+Without Ollama, the tab still works — it shows the RAG context and prompt that would be sent to an LLM.
+
+---
+
+## Optional: PostgreSQL with pgvector
+
+For persistent alert storage and semantic search:
+
+```bash
+# Using Docker
+docker run -d --name ibvap-postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=ibvap \
+  -p 5432:5432 \
+  pgvector/pgvector:pg16
+
+# Set the connection string
+export DATABASE_URL="postgresql+psycopg2://postgres:postgres@localhost:5432/ibvap"
+```
+
+Without PostgreSQL, the system uses in-memory storage (resets on restart).
+
+---
+
+## Adding Your Own Videos
+
+Place any **landscape-oriented** MP4 files in the `sample-videos/` directory. The backend automatically:
+1. Scans for `.mp4`, `.avi`, `.mkv`, `.mov` files
+2. Filters for landscape orientation (width > height)
+3. Launches up to 6 camera engines
+4. Assigns camera IDs: `CAM-BOP-01`, `CAM-BOP-02`, etc.
+
+---
+
+## Team
+
+| Member | Role |
+|--------|------|
+| **Nitish** | AI/ML Lead — 3-stage pipeline, YOLOv8/DeepSORT, RAG |
+| **Devansh** | Optimization — ONNX/OpenVINO, edge latency, GenAI module |
+| **Prashant** | Frontend Lead — Streamlit dashboard, Folium mapping |
+| **Bhumika** | Backend Lead — FastAPI infrastructure, async routing |
+| **Arnav** | Quality Engineering — PostgreSQL/pgvector, SQLite edge queues |
+| **Garima** | DevOps — RTSP ingestion, Docker containerization |
+
+---
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.
+
+---
+
+<p align="center">
+  <strong>Built for SIH26187 · Sashastra Seema Bal (SSB) · Ministry of Home Affairs</strong><br>
+  <em>"The Night gathers, and now my watch begins."</em>
+</p>
