@@ -27,16 +27,16 @@
 
 | Feature | Description |
 |---------|-------------|
-| 🎯 **3-Stage Gated Pipeline** | MOG2 motion gate → YOLOv8n classification → DeepSORT persistent tracking |
-| 🛡️ **4-Layer False Alarm Suppression** | Static masks, track confirmation (≥8 frames + ≥2m), homography geometric gate, hard-negative feedback loop |
-| 🗺️ **Ground Homography** | Pixel → real-world GPS coordinate mapping via calibrated 3×3 homography matrix |
-| 📹 **MJPEG Streaming Wall** | Zero-latency live feeds with AI-annotated bounding boxes in browser |
-| 🔍 **ANPR Engine** | Perspective warp + EasyOCR + Indian plate regex + multi-frame character voting |
-| 📊 **Ranked Alert Dashboard** | Priority-scored threat queue with glassmorphism UI (Streamlit) |
-| 🗺️ **Tactical Map** | Folium-based geospatial plotting of incursions |
-| 🤖 **AI Copilot (RAG)** | Natural language querying of historical alerts via sentence-transformers embeddings |
-| 💾 **Store-and-Forward** | SQLite edge queue with async sync — zero data loss on network failure |
-| ⚙️ **Zone Configuration** | Per-camera surveillance modes: Alert, Civilian, No Civilian, No Vehicle, Emergency |
+| **3-Stage Gated Pipeline** | MOG2 motion gate → YOLOv8n classification → DeepSORT persistent tracking |
+| **4-Layer False Alarm Suppression** | Static masks, track confirmation (≥8 frames + ≥2m), homography geometric gate, hard-negative feedback loop |
+| **Ground Homography** | Pixel → real-world GPS coordinate mapping via calibrated 3×3 homography matrix |
+| **MJPEG Streaming Wall** | Zero-latency live feeds with AI-annotated bounding boxes in browser |
+| **ANPR Engine** | Perspective warp + EasyOCR + Indian plate regex + multi-frame character voting |
+| **Ranked Alert Dashboard** | Priority-scored threat queue with glassmorphism UI (Streamlit) |
+| **Tactical Map** | Folium-based geospatial plotting of incursions |
+| **AI Copilot (RAG)** | Natural language querying of historical alerts via sentence-transformers embeddings |
+| **Store-and-Forward** | SQLite edge queue with async sync — zero data loss on network failure |
+| **Zone Configuration** | Per-camera surveillance modes: Alert, Civilian, No Civilian, No Vehicle, Emergency |
 
 ---
 
