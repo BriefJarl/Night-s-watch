@@ -45,42 +45,41 @@ class EdgeQueue:
     def init_db(self):
         """Initializes the SQLite alerts table with index on priority and sync status."""
         with self._lock:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS alerts (
-                    alert_id TEXT PRIMARY KEY,
-                    timestamp TEXT NOT NULL,
-                    camera_id TEXT NOT NULL,
-                    track_id INTEGER NOT NULL,
-                    object_class TEXT NOT NULL,
-                    class_id INTEGER NOT NULL,
-                    confidence REAL NOT NULL,
-                    world_coords_x REAL NOT NULL,
-                    world_coords_y REAL NOT NULL,
-                    velocity_mps REAL NOT NULL,
-                    heading_deg REAL NOT NULL,
-                    zone TEXT NOT NULL,
-                    primary_rule TEXT NOT NULL,
-                    active_rules_json TEXT NOT NULL,
-                    priority_score REAL NOT NULL,
-                    priority_level TEXT NOT NULL,
-                    license_plate TEXT,
-                    thumbnail_b64 TEXT,
-                    synced_status INTEGER DEFAULT 0,
-                    created_at REAL NOT NULL
+            with sqlite3.connect(self.db_path, timeout=10) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS alerts (
+                        alert_id TEXT PRIMARY KEY,
+                        timestamp TEXT NOT NULL,
+                        camera_id TEXT NOT NULL,
+                        track_id INTEGER NOT NULL,
+                        object_class TEXT NOT NULL,
+                        class_id INTEGER NOT NULL,
+                        confidence REAL NOT NULL,
+                        world_coords_x REAL NOT NULL,
+                        world_coords_y REAL NOT NULL,
+                        velocity_mps REAL NOT NULL,
+                        heading_deg REAL NOT NULL,
+                        zone TEXT NOT NULL,
+                        primary_rule TEXT NOT NULL,
+                        active_rules_json TEXT NOT NULL,
+                        priority_score REAL NOT NULL,
+                        priority_level TEXT NOT NULL,
+                        license_plate TEXT,
+                        thumbnail_b64 TEXT,
+                        synced_status INTEGER DEFAULT 0,
+                        created_at REAL NOT NULL
+                    )
+                    """
                 )
-                """
-            )
-            cursor.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_alerts_sync_priority 
-                ON alerts (synced_status, priority_score DESC, created_at ASC)
-                """
-            )
-            conn.commit()
-            conn.close()
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_alerts_sync_priority 
+                    ON alerts (synced_status, priority_score DESC, created_at ASC)
+                    """
+                )
+                conn.commit()
 
     @staticmethod
     def compress_image_to_base64(image_crop: np.ndarray, quality: int = 75) -> str:
@@ -141,41 +140,59 @@ class EdgeQueue:
 
         try:
             with self._lock:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT OR REPLACE INTO alerts (
-                        alert_id, timestamp, camera_id, track_id, object_class, class_id,
-                        confidence, world_coords_x, world_coords_y, velocity_mps, heading_deg,
-                        zone, primary_rule, active_rules_json, priority_score, priority_level,
-                        license_plate, thumbnail_b64, synced_status, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-                    """,
-                    (
-                        alert_id,
-                        timestamp,
-                        camera_id,
-                        track_id,
-                        object_class,
-                        class_id,
-                        confidence,
-                        x_w,
-                        y_w,
-                        velocity_mps,
-                        heading_deg,
-                        zone,
-                        primary_rule,
-                        active_rules_json,
-                        priority_score,
-                        priority_level,
-                        plate,
-                        thumbnail_b64,
-                        created_at,
-                    ),
-                )
-                conn.commit()
-                conn.close()
+                with sqlite3.connect(self.db_path, timeout=10) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        INSERT INTO alerts (
+                            alert_id, timestamp, camera_id, track_id, object_class, class_id,
+                            confidence, world_coords_x, world_coords_y, velocity_mps, heading_deg,
+                            zone, primary_rule, active_rules_json, priority_score, priority_level,
+                            license_plate, thumbnail_b64, synced_status, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+
+                        ON CONFLICT(alert_id) DO UPDATE SET
+                            timestamp = excluded.timestamp,
+                            camera_id = excluded.camera_id,
+                            track_id = excluded.track_id,
+                            object_class = excluded.object_class,
+                            class_id = excluded.class_id,
+                            confidence = excluded.confidence,
+                            world_coords_x = excluded.world_coords_x,
+                            world_coords_y = excluded.world_coords_y,
+                            velocity_mps = excluded.velocity_mps,
+                            heading_deg = excluded.heading_deg,
+                            zone = excluded.zone,
+                            primary_rule = excluded.primary_rule,
+                            active_rules_json = excluded.active_rules_json,
+                            priority_score = excluded.priority_score,
+                            priority_level = excluded.priority_level,
+                            license_plate = COALESCE(excluded.license_plate, alerts.license_plate),
+                            thumbnail_b64 = COALESCE(excluded.thumbnail_b64, alerts.thumbnail_b64)
+                        """,
+                        (
+                            alert_id,
+                            timestamp,
+                            camera_id,
+                            track_id,
+                            object_class,
+                            class_id,
+                            confidence,
+                            x_w,
+                            y_w,
+                            velocity_mps,
+                            heading_deg,
+                            zone,
+                            primary_rule,
+                            active_rules_json,
+                            priority_score,
+                            priority_level,
+                            plate,
+                            thumbnail_b64,
+                            created_at,
+                        ),
+                    )
+                    conn.commit()
             return True
         except Exception as e:
             print(f"[EdgeQueue] Error enqueueing alert {alert_id}: {e}")
@@ -187,41 +204,40 @@ class EdgeQueue:
         """
         alerts = []
         with self._lock:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT * FROM alerts 
-                WHERE synced_status = 0 
-                ORDER BY priority_score DESC, created_at ASC 
-                LIMIT ?
-                """,
-                (limit,),
-            )
-            rows = cursor.fetchall()
-            for row in rows:
-                alerts.append({
-                    "alert_id": row["alert_id"],
-                    "timestamp": row["timestamp"],
-                    "camera_id": row["camera_id"],
-                    "track_id": row["track_id"],
-                    "object_class": row["object_class"],
-                    "class_id": row["class_id"],
-                    "confidence": row["confidence"],
-                    "world_coords": {"x": row["world_coords_x"], "y": row["world_coords_y"]},
-                    "velocity_mps": row["velocity_mps"],
-                    "heading_deg": row["heading_deg"],
-                    "zone": row["zone"],
-                    "primary_rule": row["primary_rule"],
-                    "active_rules": json.loads(row["active_rules_json"]),
-                    "priority_score": row["priority_score"],
-                    "priority_level": row["priority_level"],
-                    "license_plate": row["license_plate"],
-                    "thumbnail_b64": row["thumbnail_b64"],
-                    "synced_status": bool(row["synced_status"]),
-                })
-            conn.close()
+            with sqlite3.connect(self.db_path, timeout=10) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT * FROM alerts 
+                    WHERE synced_status = 0 
+                    ORDER BY priority_score DESC, created_at ASC 
+                    LIMIT ?
+                    """,
+                    (limit,),
+                )
+                rows = cursor.fetchall()
+                for row in rows:
+                    alerts.append({
+                        "alert_id": row["alert_id"],
+                        "timestamp": row["timestamp"],
+                        "camera_id": row["camera_id"],
+                        "track_id": row["track_id"],
+                        "object_class": row["object_class"],
+                        "class_id": row["class_id"],
+                        "confidence": row["confidence"],
+                        "world_coords": {"x": row["world_coords_x"], "y": row["world_coords_y"]},
+                        "velocity_mps": row["velocity_mps"],
+                        "heading_deg": row["heading_deg"],
+                        "zone": row["zone"],
+                        "primary_rule": row["primary_rule"],
+                        "active_rules": json.loads(row["active_rules_json"]),
+                        "priority_score": row["priority_score"],
+                        "priority_level": row["priority_level"],
+                        "license_plate": row["license_plate"],
+                        "thumbnail_b64": row["thumbnail_b64"],
+                        "synced_status": bool(row["synced_status"]),
+                    })
         return alerts
 
     def mark_as_synced(self, alert_ids: List[str]):
@@ -229,38 +245,35 @@ class EdgeQueue:
         if not alert_ids:
             return
         with self._lock:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            placeholders = ",".join("?" for _ in alert_ids)
-            cursor.execute(
-                f"UPDATE alerts SET synced_status = 1 WHERE alert_id IN ({placeholders})",
-                alert_ids,
-            )
-            conn.commit()
-            conn.close()
+            with sqlite3.connect(self.db_path, timeout=10) as conn:
+                cursor = conn.cursor()
+                placeholders = ",".join("?" for _ in alert_ids)
+                cursor.execute(
+                    f"UPDATE alerts SET synced_status = 1 WHERE alert_id IN ({placeholders})",
+                    alert_ids,
+                )
+                conn.commit()
 
     def get_queue_stats(self) -> Dict[str, Any]:
         """Returns statistics on total alerts, pending sync count, and priority breakdown."""
         with self._lock:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM alerts")
-            total_count = cursor.fetchone()[0]
+            with sqlite3.connect(self.db_path, timeout=10) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM alerts")
+                total_count = cursor.fetchone()[0]
 
-            cursor.execute("SELECT COUNT(*) FROM alerts WHERE synced_status = 0")
-            pending_count = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM alerts WHERE synced_status = 0")
+                pending_count = cursor.fetchone()[0]
 
-            cursor.execute(
-                "SELECT COUNT(*) FROM alerts WHERE synced_status = 0 AND priority_level = 'CRITICAL'"
-            )
-            pending_critical = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT COUNT(*) FROM alerts WHERE synced_status = 0 AND priority_level = 'CRITICAL'"
+                )
+                pending_critical = cursor.fetchone()[0]
 
-            cursor.execute(
-                "SELECT COUNT(*) FROM alerts WHERE synced_status = 0 AND priority_level = 'HIGH'"
-            )
-            pending_high = cursor.fetchone()[0]
-
-            conn.close()
+                cursor.execute(
+                    "SELECT COUNT(*) FROM alerts WHERE synced_status = 0 AND priority_level = 'HIGH'"
+                )
+                pending_high = cursor.fetchone()[0]
 
         return {
             "total_alerts": total_count,
@@ -308,7 +321,13 @@ class EdgeQueue:
                 if post_resp.status_code in [200, 201]:
                     synced_ids.append(alert["alert_id"])
                 else:
-                    # Non-200 response -> stop batch to avoid out-of-order syncing
+                    print(
+                        f"[EdgeQueue] Backend rejected alert "
+                        f"{alert['alert_id']} "
+                        f"with status {post_resp.status_code}"
+                    )
+
+                    self.is_connected = False
                     break
             except Exception as e:
                 print(f"[EdgeQueue] Sync failed for alert {alert['alert_id']}: {e}")

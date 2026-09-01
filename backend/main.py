@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 import sys
 import time
 import asyncio
@@ -108,11 +109,17 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Enable CORS for Streamlit frontend and local dashboards
+FRONTEND_ORIGINS = [
+    "http://localhost:8501",
+    "http://127.0.0.1:8501",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=FRONTEND_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -337,6 +344,13 @@ async def stream_camera(camera_id: str):
         headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
     )
 
+
+@app.get("/api/v1/config/status")
+async def get_config_status():
+    return {
+        "status": "ok",
+        "configured": True
+    }
 
 # ---------------------------------------------------------------------------
 # Phase 5: Zone Configuration Endpoints

@@ -255,14 +255,26 @@ class ANPREngine:
             return self.multi_frame_vote(track_id)
 
         # Extract plate ROI
-        if plate_quad is not None:
-            plate_img = self.warp_perspective(vehicle_crop, plate_quad)
+        if (
+            plate_quad is not None
+            and isinstance(plate_quad, np.ndarray)
+            and plate_quad.shape == (4, 2)
+        ):
+            try:
+                plate_img = self.warp_perspective(vehicle_crop, plate_quad)
+            except cv2.error as e:
+                print(f"[ANPREngine] Perspective warp failed: {e}")
+                plate_img = None
         else:
-            # Heuristic: license plate is typically in the bottom 40% center of vehicle crop
+            plate_img = None
+
+        if plate_img is None or plate_img.size == 0:
             h, w = vehicle_crop.shape[:2]
+
             y1 = int(h * 0.60)
             x1 = int(w * 0.15)
             x2 = int(w * 0.85)
+
             plate_img = vehicle_crop[y1:h, x1:x2]
 
         plate_str, conf = self.extract_plate_text(plate_img)

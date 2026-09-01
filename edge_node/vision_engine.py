@@ -13,10 +13,10 @@ try:
 except ImportError:
     _requests = None
 
-from backend.edge_node.false_alarm_filter import FalseAlarmFilter
-from backend.edge_node.rule_engine import RuleEngine
-from backend.edge_node.anpr_engine import ANPREngine
-from backend.edge_node.edge_queue import EdgeQueue
+from edge_node.false_alarm_filter import FalseAlarmFilter
+from edge_node.rule_engine import RuleEngine
+from edge_node.anpr_engine import ANPREngine
+from edge_node.edge_queue import EdgeQueue
 
 
 class VisionEngine:
@@ -49,9 +49,22 @@ class VisionEngine:
             self.cap = cv2.VideoCapture(source)
 
         if not self.cap.isOpened():
-            print(f"[VisionEngine] Warning: Could not open video source '{source}'")
-            if not self.headless:
-                exit(1)
+            raise RuntimeError(
+                f"[VisionEngine] Could not open video source: {source}"
+            )
+
+        self.is_file_source = False
+
+        if isinstance(source, str):
+            lower_source = source.lower()
+
+            if not (
+                source.isdigit()
+                or lower_source.startswith("rtsp://")
+                or lower_source.startswith("http://")
+                or lower_source.startswith("https://")
+            ):
+                self.is_file_source = True
 
         # Stage 1: Lightweight Monitor (Background Subtraction)
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
@@ -62,7 +75,14 @@ class VisionEngine:
         # Stage 2: Gated Verification (YOLOv8n)
         # Target COCO Classes: person (0), car (2), motorcycle (3), bus (5), truck (7)
         self.target_classes = [0, 2, 3, 5, 7]
-        self.model = YOLO("yolov8n.pt")
+        try:
+            print("[VisionEngine] Loading YOLO model...")
+            self.model = YOLO("yolov8n.pt")
+            print("[VisionEngine] YOLO model loaded successfully.")
+        except Exception as e:
+            raise RuntimeError(
+                f"[VisionEngine] Failed to load YOLO model: {e}"
+            ) from e
 
         # Stage 3: Persistent Tracking (DeepSORT)
         self.tracker = DeepSort(
@@ -96,11 +116,13 @@ class VisionEngine:
         self.tamper_status = "OK"
         self.is_tampered = False
         self.latest_alerts = []
+        self._alerts_lock = threading.Lock()
         self.last_enqueued_timestamps: Dict[int, float] = {}
 
         # Phase 5: Thread-safe JPEG frame buffer for MJPEG streaming endpoint.
         self._latest_jpeg: Optional[bytes] = None
         self._frame_lock = threading.Lock()
+        self._stop_event = threading.Event()
 
         # Phase 5: Zone polling — interval (seconds) to fetch user zone from backend.
         self._zone_poll_interval = 30.0
@@ -116,23 +138,54 @@ class VisionEngine:
             return self._latest_jpeg
 
     def _poll_zone(self) -> None:
-        """
-        Phase 5: Non-blocking zone poll — fetches the operator-drawn pixel polygon
-        from the backend REST API and injects it into the RuleEngine.
-        Called at most every _zone_poll_interval seconds from within run().
-        """
+        """Fetch the latest operator-defined zone from the backend."""
+
         if _requests is None:
             return
+
         try:
-            url = f"{self.backend_url}/api/v1/cameras/{self.camera_id}/zones"
-            resp = _requests.get(url, timeout=2.0)
-            if resp.status_code == 200:
-                data = resp.json()
-                polygon = data.get("polygon", [])
-                zone_label = data.get("zone_label", "Alert zone")
-                self.rule_engine.set_user_zone(polygon, zone_label)
-        except Exception:
-            pass  # Network unavailable — keep existing zone
+            url = (
+                f"{self.backend_url}/api/v1/cameras/"
+                f"{self.camera_id}/zones"
+            )
+
+            response = _requests.get(
+                url,
+                timeout=(1.0, 2.0),
+            )
+
+            if response.status_code != 200:
+                return
+
+            data = response.json()
+
+            polygon = data.get("polygon")
+
+            if not polygon or not isinstance(polygon, list):
+                return
+
+            zone_label = data.get(
+                "zone_label",
+                "RESTRICTED",
+            )
+
+            self.rule_engine.set_user_zone(
+                polygon,
+                zone_label,
+            )
+
+        except Exception as e:
+            print(
+                f"[VisionEngine] Zone polling failed: {e}"
+            )
+
+    def stop(self) -> None:
+        """Request the vision engine to stop safely."""
+        self._stop_event.set()
+
+    def get_latest_alerts(self) -> List[Dict]:
+        with self._alerts_lock:
+            return self.latest_alerts.copy()
 
     def run_background(self) -> threading.Thread:
         """
@@ -301,7 +354,17 @@ class VisionEngine:
 
         # Stage 2: Gated Verification (Wake up YOLOv8 only if motion detected)
         if motion_detected:
-            results = self.model(frame, classes=self.target_classes, verbose=False)
+            try:
+                results = self.model(
+                    frame,
+                    classes=self.target_classes,
+                    verbose=False,
+                )
+            except Exception as e:
+                print(
+                    f"[VisionEngine] YOLO inference failed: {e}"
+                )
+                results = []
             for result in results:
                 boxes = result.boxes
                 for box in boxes:
@@ -452,8 +515,36 @@ class VisionEngine:
         # Render HUD
         frame = self.draw_hud(frame, motion_detected, active_threat_count)
 
-        self.latest_alerts = current_alerts
+        with self._alerts_lock:
+            self.latest_alerts = current_alerts.copy()
         return frame, current_alerts
+
+    def resize_frame(
+        self,
+        frame: np.ndarray,
+        max_width: int = 1280,
+        max_height: int = 720,
+    ) -> np.ndarray:
+
+        height, width = frame.shape[:2]
+
+        scale = min(
+            max_width / width,
+            max_height / height,
+            1.0,
+        )
+
+        if scale >= 1.0:
+            return frame
+
+        new_width = int(width * scale)
+        new_height = int(height * scale)
+
+        return cv2.resize(
+            frame,
+            (new_width, new_height),
+            interpolation=cv2.INTER_LINEAR,
+        )
 
     def run(self):
         """
@@ -480,35 +571,57 @@ class VisionEngine:
         frame_delay = 1.0 / source_fps
 
         try:
-            while True:
+            while not self._stop_event.is_set():
                 # Limit read speed to actual video FPS to prevent buffer bloat
                 time.sleep(frame_delay)
                 ret, frame = self.cap.read()
 
                 # Phase 5: Loop video files indefinitely — reset on end-of-file.
                 if not ret:
-                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    ret, frame = self.cap.read()
-                    if not ret:
-                        print(f"[VisionEngine] Critical: cannot read from source '{self.source}'. Stopping.")
-                        break
+
+                    if self.is_file_source:
+                        print(
+                            "[VisionEngine] Video reached EOF. Restarting..."
+                        )
+
+                        self.cap.set(
+                            cv2.CAP_PROP_POS_FRAMES,
+                            0,
+                        )
+
+                        continue
+
+                    print(
+                        "[VisionEngine] Frame read failed. Retrying..."
+                    )
+
+                    time.sleep(1)
+                    continue
 
                 # ── Phase 5: Downscale to 720p immediately after capture ──────────
                 # Must happen BEFORE MOG2, YOLO, DeepSORT, and JPEG encode so every
                 # downstream operation benefits. INTER_LINEAR is the fastest
                 # interpolation that avoids blocky artifacts.
-                frame = cv2.resize(frame, (STREAM_W, STREAM_H),
-                                   interpolation=cv2.INTER_LINEAR)
+                frame = self.resize_frame(
+                    frame,
+                    STREAM_W,
+                    STREAM_H,
+                )
                 # ─────────────────────────────────────────────────────────────────
 
                 current_time = time.time()
                 if current_time - self.last_process_time < self.process_interval:
                     # Between AI processing intervals — push raw (resized) frame to
                     # buffer so the MJPEG stream stays fluid between 2-FPS ticks.
-                    _, raw_jpeg = cv2.imencode(".jpg", frame,
-                                              [cv2.IMWRITE_JPEG_QUALITY, 70])
-                    with self._frame_lock:
-                        self._latest_jpeg = raw_jpeg.tobytes()
+                    success, raw_jpeg = cv2.imencode(
+                        ".jpg",
+                        frame,
+                        [cv2.IMWRITE_JPEG_QUALITY, 70],
+                    )
+
+                    if success:
+                        with self._frame_lock:
+                            self._latest_jpeg = raw_jpeg.tobytes()
                     continue
 
                 self.last_process_time = current_time
@@ -521,10 +634,15 @@ class VisionEngine:
                 processed_frame, alerts = self.process_frame(frame, current_time)
 
                 # Phase 5: Write AI-annotated frame to JPEG buffer for streaming endpoint.
-                _, jpeg_buf = cv2.imencode(".jpg", processed_frame,
-                                          [cv2.IMWRITE_JPEG_QUALITY, 80])
-                with self._frame_lock:
-                    self._latest_jpeg = jpeg_buf.tobytes()
+                success, jpeg_buf = cv2.imencode(
+                    ".jpg",
+                    processed_frame,
+                    [cv2.IMWRITE_JPEG_QUALITY, 80],
+                )
+
+                if success:
+                    with self._frame_lock:
+                        self._latest_jpeg = jpeg_buf.tobytes()
 
                 if not self.headless:
                     try:

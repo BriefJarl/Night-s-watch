@@ -1,91 +1,201 @@
-import os
+from functools import lru_cache
+from typing import List, Any
+
 from sentence_transformers import SentenceTransformer
 
-# Initialize the embedding model globally so it stays in memory
-# Utilizing HuggingFace's all-MiniLM-L6-v2 as requested for dense vector generation
-model_name = "sentence-transformers/all-MiniLM-L6-v2"
-try:
-    print(f"Loading embedding model: {model_name}...")
-    model = SentenceTransformer(model_name)
-    print("Embedding model loaded successfully.")
-except Exception as e:
-    print(f"Warning: Failed to load SentenceTransformer model. Error: {e}")
-    model = None
+
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+
+
+# ---------------------------------------------------------
+# LAZY MODEL LOADING
+# ---------------------------------------------------------
+
+@lru_cache(maxsize=1)
+def get_embedding_model():
+
+    print(
+        f"[GenAI] Loading embedding model: {MODEL_NAME}"
+    )
+
+    model = SentenceTransformer(MODEL_NAME)
+
+    print(
+        "[GenAI] Embedding model loaded successfully."
+    )
+
+    return model
+
+
+# ---------------------------------------------------------
+# ALERT → SEMANTIC TEXT
+# ---------------------------------------------------------
 
 def translate_alert_to_text(alert: dict) -> str:
-    """
-    Translates a JSON alert payload into a semantic natural language sentence.
-    
-    Example output: 
-    'A vehicle was detected at coordinates 28.1, 77.2 on 2026-08-28T23:45:00Z moving at 15.5 m/s with a heading of 45.0 degrees.'
-    """
-    object_class = alert.get("object_class", "unknown object")
-    
-    # Extract coordinates
-    coords = alert.get("world_coords", {})
-    x = coords.get("x", 0.0)
-    y = coords.get("y", 0.0)
-    
-    timestamp = alert.get("timestamp", "unknown time")
-    velocity = alert.get("velocity_mps", 0.0)
-    heading = alert.get("heading_deg", 0.0)
-    priority = alert.get("priority_level", "UNKNOWN")
-    camera = alert.get("camera_id", "unknown camera")
+
+    object_class = alert.get(
+        "object_class",
+        "unknown object",
+    )
+
+    coords = alert.get(
+        "world_coords",
+        {},
+    )
+
+    x = float(
+        coords.get("x", 0.0)
+    )
+
+    y = float(
+        coords.get("y", 0.0)
+    )
+
+    timestamp = alert.get(
+        "timestamp",
+        "unknown time",
+    )
+
+    velocity = float(
+        alert.get(
+            "velocity_mps",
+            0.0,
+        )
+    )
+
+    heading = float(
+        alert.get(
+            "heading_deg",
+            0.0,
+        )
+    )
+
+    priority = alert.get(
+        "priority_level",
+        "UNKNOWN",
+    )
+
+    camera = alert.get(
+        "camera_id",
+        "unknown camera",
+    )
 
     sentence = (
-        f"A {priority} priority {object_class} was detected by {camera} "
-        f"at coordinates {x:.5f}, {y:.5f} on {timestamp} "
-        f"moving at {velocity:.1f} m/s with a heading of {heading:.1f} degrees."
+        f"A {priority} priority {object_class} "
+        f"was detected by camera {camera} "
+        f"at coordinates {x:.5f}, {y:.5f} "
+        f"on {timestamp}, "
+        f"moving at {velocity:.1f} m/s "
+        f"with heading {heading:.1f} degrees."
     )
-    
-    feedback = alert.get("feedback_status")
+
+    feedback = alert.get(
+        "feedback_status"
+    )
+
     if feedback == "CONFIRMED_BREACH":
-        sentence += " This was manually CONFIRMED as a critical breach by the operator."
+
+        sentence += (
+            " The operator confirmed this event "
+            "as a critical breach."
+        )
+
     elif feedback == "FALSE_ALARM":
-        sentence += " This was flagged as a FALSE ALARM by the operator."
+
+        sentence += (
+            " The operator marked this event "
+            "as a false alarm."
+        )
+
     elif alert.get("is_threat"):
-        sentence += " It was flagged as a potential threat by the AI."
-        
+
+        sentence += (
+            " The AI classified this event "
+            "as a potential threat."
+        )
+
     return sentence
 
-def embed_text(text: str) -> list[float]:
-    """
-    Converts a natural language string into a 384-dimensional vector array.
-    """
-    if model is None:
-        # Fallback to zero vector if model failed to load
-        print("Warning: Model not loaded, returning zero vector.")
-        return [0.0] * 384
-        
-    # Generate embedding
-    embedding = model.encode(text)
-    
-    # Return as a simple list of floats for pgvector insertion
+
+# ---------------------------------------------------------
+# TEXT → VECTOR
+# ---------------------------------------------------------
+
+def embed_text(text: str) -> List[float]:
+
+    if not text or not text.strip():
+
+        raise ValueError(
+            "Cannot generate embedding from empty text."
+        )
+
+    model = get_embedding_model()
+
+    embedding = model.encode(
+        text,
+        normalize_embeddings=True,
+    )
+
     return embedding.tolist()
 
-def generate_rag_prompt(query: str, search_results: list) -> str:
-    """
-    Constructs an LLM prompt template using the user's query and the retrieved contexts.
-    
-    If you integrate an LLM (e.g., via openai package or ollama), you would pass this 
-    prompt to the LLM to get the final response.
-    """
-    context_blocks = []
-    for i, result in enumerate(search_results, 1):
-        context_blocks.append(f"[{i}] {result.semantic_text}")
-        
-    context_text = "\n".join(context_blocks)
-    
-    prompt = f"""You are a tactical assistant for the IBVAP system.
-Based on the following historical alerts retrieved from the database, answer the officer's query.
-Keep your answer concise, factual, and strictly based on the provided context.
 
---- Context ---
+# ---------------------------------------------------------
+# RAG PROMPT
+# ---------------------------------------------------------
+
+def generate_rag_prompt(
+    query: str,
+    search_results: List[Any],
+) -> str:
+
+    if not search_results:
+
+        context_text = (
+            "No relevant historical alerts "
+            "were retrieved."
+        )
+
+    else:
+
+        context_blocks = []
+
+        for index, result in enumerate(
+            search_results,
+            start=1,
+        ):
+
+            context_blocks.append(
+                f"[{index}] "
+                f"Alert ID: {result.alert_id}\n"
+                f"{result.semantic_text}"
+            )
+
+        context_text = "\n\n".join(
+            context_blocks
+        )
+
+    prompt = f"""
+You are an AI tactical assistant for the
+IBVAP Intelligent Border Video Analytics Platform.
+
+Answer the user's question using ONLY the
+retrieved alert context.
+
+Rules:
+- Do not invent information.
+- If the answer is not present in the context,
+  clearly say that the information is unavailable.
+- Keep the answer concise and factual.
+
+--- RETRIEVED ALERT CONTEXT ---
+
 {context_text}
 
---- Query ---
+--- USER QUERY ---
+
 {query}
 
---- Response ---
+--- ANSWER ---
 """
-    return prompt
+
+    return prompt.strip()

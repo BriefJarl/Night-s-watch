@@ -1,8 +1,11 @@
-import streamlit as st
-import requests
+import os
 import json
 import time
 import base64
+import streamlit as st
+import requests
+from dotenv import load_dotenv
+load_dotenv()
 from datetime import datetime
 from typing import Optional, Dict, List, Any
 import folium
@@ -444,7 +447,10 @@ with tab_map:
             center_lat = sum([c[0] for c in valid_coords]) / len(valid_coords)
             center_lon = sum([c[1] for c in valid_coords]) / len(valid_coords)
 
-        carto_api_key = "cb1_2kbh_1_6816a26dfec7dcc8c58f9cce"
+        carto_api_key = os.getenv("CARTO_API_KEY")
+        if not carto_api_key:
+            st.error("CARTO_API_KEY is not configured.")
+            st.stop()
         tile_url = f"https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}.png?key={carto_api_key}"
         attr = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, &copy; <a href="https://carto.com/attributions">CARTO</a>'
 
