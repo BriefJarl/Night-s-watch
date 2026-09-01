@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.database import init_db, get_db, AlertEvent, CameraZone
+from database import init_db, get_db, AlertEvent, CameraZone
 
 try:
     from backend import genai_copilot
