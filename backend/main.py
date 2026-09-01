@@ -11,8 +11,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from database import init_db, get_db, AlertEvent, CameraZone
-import genai_copilot
+from backend.database import init_db, get_db, AlertEvent, CameraZone
+
+try:
+    from backend import genai_copilot
+except ImportError:
+    import genai_copilot
 
 # ---------------------------------------------------------------------------
 # Phase 5: Engine Registry — maps camera_id -> VisionEngine instance
@@ -69,14 +73,10 @@ class InvestigateQuery(BaseModel):
 class ZonePayload(BaseModel):
     """Phase 5: Payload for saving operator-drawn polygon zone."""
     polygon: List[List[float]] = Field(
-        default_factory=list,
-        description="List of [x, y] pixel coordinate pairs defining the restricted zone polygon. Now optional/unused."
+        ...,
+        description="List of [x, y] pixel coordinate pairs defining the restricted zone polygon."
     )
     zone_label: str = Field(default="RESTRICTED", description="Display label for the zone.")
-
-
-class ConfigInitPayload(BaseModel):
-    camera_zones: Dict[str, str] = Field(..., description="Mapping of camera ID to surveillance mode")
 
 
 class AlertResponse(BaseModel):
@@ -122,13 +122,71 @@ ALERTS_DB: Dict[str, Dict[str, Any]] = {}
 HARD_NEGATIVE_DIR = os.path.join(os.path.dirname(__file__), "data", "hard_negatives")
 os.makedirs(HARD_NEGATIVE_DIR, exist_ok=True)
 START_TIME = time.time()
-IS_SYSTEM_CONFIGURED = False
 
+
+def get_optional_db():
+    """
+    Safe database dependency.
+
+    If PostgreSQL is unavailable, API endpoints continue
+    working using in-memory storage.
+    """
+
+    db_generator = None
+    db = None
+
+    try:
+        db_generator = get_db()
+        db = next(db_generator)
+
+    except Exception as e:
+        print(f"[Backend] Database unavailable: {e}")
+        db = None
+
+    try:
+        # IMPORTANT: only one yield
+        yield db
+
+    finally:
+        if db_generator is not None:
+            try:
+                next(db_generator)
+            except StopIteration:
+                pass
+            except Exception as e:
+                print(f"[Backend] Database cleanup warning: {e}")
 
 @app.on_event("startup")
 def on_startup():
-    init_db()
-    _launch_vision_engines()
+    print("\n" + "=" * 60)
+    print("IBVAP BACKEND STARTING")
+    print("=" * 60)
+
+    # ---------------------------------------------------------
+    # DATABASE STARTUP
+    # PostgreSQL is OPTIONAL for local/demo mode.
+    # Backend must continue running if PostgreSQL is unavailable.
+    # ---------------------------------------------------------
+    try:
+        init_db()
+        print("[Backend] PostgreSQL database connected successfully.")
+    except Exception as e:
+        print(
+            "[Backend] WARNING: PostgreSQL is unavailable. "
+            "Running in DEMO / IN-MEMORY MODE."
+        )
+        print(f"[Backend] Database error: {e}")
+
+    # ---------------------------------------------------------
+    # START VISION ENGINES
+    # ---------------------------------------------------------
+    try:
+        _launch_vision_engines()
+    except Exception as e:
+        print(f"[Backend] WARNING: Vision engines could not start: {e}")
+
+    print("[Backend] Startup completed successfully.")
+    print("=" * 60 + "\n")
 
 
 def _probe_landscape(video_path: str) -> bool:
@@ -159,8 +217,6 @@ def _launch_vision_engines() -> None:
     global ACTIVE_ENGINES, CAMERA_SOURCES
 
     try:
-        # Ensure edge_node is importable when running from backend/
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from edge_node.vision_engine import VisionEngine
     except ImportError as e:
         print(f"[Backend] WARNING: Could not import VisionEngine: {e}. MJPEG streams unavailable.")
@@ -196,7 +252,7 @@ def _launch_vision_engines() -> None:
                 camera_id=camera_id,
                 backend_url="http://127.0.0.1:8000",
                 headless=True,
-                enable_sync=True,   # Sync enabled to send alerts to dashboard
+                enable_sync=False,   # sync handled by edge_queue separately
             )
             engine.run_background()
             ACTIVE_ENGINES[camera_id] = engine
@@ -286,48 +342,16 @@ async def stream_camera(camera_id: str):
 # Phase 5: Zone Configuration Endpoints
 # ---------------------------------------------------------------------------
 
-@app.get("/api/v1/config/status")
-async def get_config_status():
-    return {"is_configured": IS_SYSTEM_CONFIGURED}
-
-@app.post("/api/v1/config/init")
-async def init_configuration(payload: ConfigInitPayload, db: Session = Depends(get_db)):
-    global IS_SYSTEM_CONFIGURED
-    
-    for cam_id, mode in payload.camera_zones.items():
-        # Update in-memory fallback store
-        ZONE_STORE[cam_id] = {"polygon": [], "zone_label": mode}
-        
-        # Propagate to active engine
-        if cam_id in ACTIVE_ENGINES:
-            ACTIVE_ENGINES[cam_id].rule_engine.set_user_zone([])
-            ACTIVE_ENGINES[cam_id].rule_engine.user_zone_mode = mode
-            
-        # Optional: Save to PostgreSQL if available
-        if db:
-            try:
-                existing = db.query(CameraZone).filter(CameraZone.camera_id == cam_id).first()
-                if existing:
-                    existing.zone_label = mode
-                    existing.updated_at = datetime.now(timezone.utc)
-                else:
-                    db.add(CameraZone(camera_id=cam_id, zone_label=mode, polygon_json=[]))
-                db.commit()
-            except Exception as e:
-                db.rollback()
-
-    IS_SYSTEM_CONFIGURED = True
-    return {"status": "configured"}
-
-
 @app.post("/api/v1/cameras/{camera_id}/zones", status_code=status.HTTP_200_OK)
-async def save_camera_zone(camera_id: str, payload: ZonePayload, db: Session = Depends(get_db)):
+async def save_camera_zone(camera_id: str, payload: ZonePayload, db: Session = Depends(get_optional_db)):
     """
     Phase 5: Saves operator-drawn pixel polygon for a camera.
     Persists to PostgreSQL (CameraZone table) with in-memory fallback for edge nodes.
     Also immediately propagates the new zone to the active engine's RuleEngine.
     """
     polygon = payload.polygon
+    if len(polygon) < 3:
+        raise HTTPException(status_code=400, detail="Zone polygon must have at least 3 points.")
 
     # Persist to DB if available
     if db:
@@ -353,8 +377,7 @@ async def save_camera_zone(camera_id: str, payload: ZonePayload, db: Session = D
 
     # Immediately propagate to active engine's RuleEngine (no 30-s poll lag)
     if camera_id in ACTIVE_ENGINES:
-        ACTIVE_ENGINES[camera_id].rule_engine.set_user_zone(polygon, payload.zone_label)
-        ACTIVE_ENGINES[camera_id].rule_engine.user_zone_mode = payload.zone_label
+        ACTIVE_ENGINES[camera_id].rule_engine.set_user_zone(polygon)
 
     return {
         "status": "zone_saved",
@@ -365,7 +388,7 @@ async def save_camera_zone(camera_id: str, payload: ZonePayload, db: Session = D
 
 
 @app.get("/api/v1/cameras/{camera_id}/zones")
-async def get_camera_zone(camera_id: str, db: Session = Depends(get_db)):
+async def get_camera_zone(camera_id: str, db: Session = Depends(get_optional_db)):
     """
     Phase 5: Retrieves the current zone polygon for a camera.
     Queried by VisionEngine zone-polling worker every 30 seconds.
@@ -391,11 +414,11 @@ async def get_camera_zone(camera_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/api/v1/alerts", status_code=status.HTTP_201_CREATED)
-async def receive_alert(alert_payload: AlertPayload, db: Session = Depends(get_db)):
+async def ingest_alert(payload: AlertPayload, db: Session = Depends(get_optional_db)):
     """
-    Phase 4: Accepts HTTP POST from Edge Node.
+    Ingests compressed JSON alert payloads from Edge Nodes.
     """
-    alert_dict = alert_payload.model_dump()
+    alert_dict = payload.model_dump()
     alert_id = alert_dict["alert_id"]
 
     # Determine is_threat if not explicitly provided
@@ -414,7 +437,7 @@ async def receive_alert(alert_payload: AlertPayload, db: Session = Depends(get_d
         alert_dict["received_at"] = ALERTS_DB[alert_id].get("received_at", time.time())
 
     ALERTS_DB[alert_id] = alert_dict
-    
+
     # Phase 4 RAG Pipeline: Vectorize and store in PostgreSQL
     if db:
         try:
@@ -422,7 +445,7 @@ async def receive_alert(alert_payload: AlertPayload, db: Session = Depends(get_d
             if not existing:
                 semantic_text = genai_copilot.translate_alert_to_text(alert_dict)
                 embedding = genai_copilot.embed_text(semantic_text)
-                
+
                 db_event = AlertEvent(
                     alert_id=alert_id,
                     camera_id=alert_dict.get("camera_id", "CAM-BOP-01"),
@@ -474,7 +497,7 @@ async def get_alerts(
 
 
 @app.post("/api/v1/alerts/{alert_id}/feedback")
-async def record_feedback(alert_id: str, feedback: FeedbackPayload, db: Session = Depends(get_db)):
+async def record_feedback(alert_id: str, feedback: FeedbackPayload):
     """
     Hard-Negative Operator Feedback Loop:
     Logs operator audit decisions ('CONFIRMED_BREACH' or 'FALSE_ALARM').
@@ -497,15 +520,6 @@ async def record_feedback(alert_id: str, feedback: FeedbackPayload, db: Session 
     alert["feedback_by"] = feedback.operator_id
     alert["feedback_timestamp"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    if action == "FALSE_ALARM":
-        alert["priority_score"] = 0.0
-        alert["priority_level"] = "LOW"
-        alert["is_threat"] = False
-    elif action == "CONFIRMED_BREACH":
-        alert["priority_score"] = 100.0
-        alert["priority_level"] = "CRITICAL"
-        alert["is_threat"] = True
-
     # Hard-Negative Data Harvest: save crop to disk for active learning
     if action == "FALSE_ALARM" and alert.get("thumbnail_b64"):
         try:
@@ -518,20 +532,6 @@ async def record_feedback(alert_id: str, feedback: FeedbackPayload, db: Session 
                 f.write(img_bytes)
         except Exception as e:
             print(f"[Backend] Error saving hard negative sample: {e}")
-
-    # Phase 4 RAG Pipeline: Update semantic context in pgvector
-    if db:
-        try:
-            db_event = db.query(AlertEvent).filter(AlertEvent.alert_id == alert_id).first()
-            if db_event:
-                # Re-translate with the new feedback status
-                db_event.raw_payload = alert
-                db_event.semantic_text = genai_copilot.translate_alert_to_text(alert)
-                db_event.embedding = genai_copilot.embed_text(db_event.semantic_text)
-                db.commit()
-        except Exception as e:
-            print(f"Failed to update alert in pgvector database: {e}")
-            db.rollback()
 
     return {
         "status": "feedback_recorded",
@@ -578,50 +578,31 @@ async def get_stats():
 
 
 @app.post("/api/v1/investigate")
-async def investigate_alerts(payload: InvestigateQuery, db: Session = Depends(get_db)):
+async def investigate_alerts(payload: InvestigateQuery, db: Session = Depends(get_optional_db)):
     """
-    Phase 4 GenAI Copilot endpoint. 
+    Phase 4 GenAI Copilot endpoint.
     Embeds natural language query and searches pgvector database for historical analysis.
     """
+    if not db:
+        raise HTTPException(
+            status_code=503,
+            detail="PostgreSQL database not connected or pgvector unavailable."
+        )
     try:
-        if not db:
-            # Fallback for local testing without PostgreSQL/pgvector
-            print("PostgreSQL unavailable. Using in-memory fallback for GenAI Copilot.")
-            recent_alerts = list(ALERTS_DB.values())[-15:]
-            context_docs = []
-            for a in recent_alerts:
-                sem_text = genai_copilot.translate_alert_to_text(a)
-                context_docs.append({"alert_id": a.get("alert_id"), "text": sem_text})
-                
-            context_text = "\n".join([f"[{i+1}] {doc['text']}" for i, doc in enumerate(context_docs)])
-            prompt = (
-                f"You are a tactical assistant for the IBVAP system.\n"
-                f"Based on the following historical alerts retrieved from the database, answer the officer's query.\n"
-                f"Keep your answer concise, factual, and strictly based on the provided context.\n\n"
-                f"--- Context ---\n{context_text}\n\n"
-                f"--- Query ---\n{payload.query}\n\n"
-                f"--- Response ---\n"
-            )
-            return {
-                "query": payload.query,
-                "generated_prompt": prompt,
-                "context_documents": context_docs
-            }
-            
         # Step 1: Embed the query
         query_embedding = genai_copilot.embed_text(payload.query)
-        
+
         # Step 2: Query pgvector using cosine distance, limit 5
         results = db.query(AlertEvent).order_by(
             AlertEvent.embedding.cosine_distance(query_embedding)
         ).limit(5).all()
-        
+
         # Step 3: Generate the RAG LLM Prompt
         prompt = genai_copilot.generate_rag_prompt(payload.query, results)
-        
+
         # Return structured data that a frontend or LLM client can use
         context_docs = [{"alert_id": r.alert_id, "text": r.semantic_text} for r in results]
-        
+
         return {
             "query": payload.query,
             "generated_prompt": prompt,

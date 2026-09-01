@@ -13,16 +13,10 @@ try:
 except ImportError:
     _requests = None
 
-try:
-    from edge_node.false_alarm_filter import FalseAlarmFilter
-    from edge_node.rule_engine import RuleEngine
-    from edge_node.anpr_engine import ANPREngine
-    from edge_node.edge_queue import EdgeQueue
-except ImportError:
-    from false_alarm_filter import FalseAlarmFilter
-    from rule_engine import RuleEngine
-    from anpr_engine import ANPREngine
-    from edge_queue import EdgeQueue
+from backend.edge_node.false_alarm_filter import FalseAlarmFilter
+from backend.edge_node.rule_engine import RuleEngine
+from backend.edge_node.anpr_engine import ANPREngine
+from backend.edge_node.edge_queue import EdgeQueue
 
 
 class VisionEngine:
