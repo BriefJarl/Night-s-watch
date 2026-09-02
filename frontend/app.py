@@ -95,7 +95,7 @@ st.markdown(
 
 # --- Sidebar ---
 st.sidebar.markdown("<h2 style='font-weight: 800; letter-spacing: -0.5px;'><i class='fa-solid fa-satellite-dish'></i> IBVAP Link</h2>", unsafe_allow_html=True)
-backend_url = st.sidebar.text_input("Central API URL", value="http://127.0.0.1:8000")
+backend_url = st.sidebar.text_input("Central API URL", value="https://night-swatch-68ai.onrender.com")
 refresh_rate = st.sidebar.slider("Auto-Refresh Interval (s)", min_value=1, max_value=15, value=3)
 auto_refresh = st.sidebar.checkbox("Enable Live Auto-Refresh", value=True)
 st.sidebar.markdown("<hr style='border-color: rgba(255,255,255,0.1);'>", unsafe_allow_html=True)
@@ -121,9 +121,13 @@ st.sidebar.markdown(team_html, unsafe_allow_html=True)
 # --- Data Fetching ---
 def fetch_backend_health(url: str) -> bool:
     try:
-        r = requests.get(f"{url}/api/v1/health", timeout=1.5)
+        r = requests.get(
+            f"{url}/api/v1/health",
+            timeout=15
+        )
         return r.status_code == 200
-    except Exception:
+    except Exception as e:
+        print(f"Backend health check error: {e}")
         return False
 
 def fetch_stats(url: str) -> Dict:

@@ -32,7 +32,7 @@ class VisionEngine:
         self,
         source: str = "0",
         camera_id: str = "CAM-BOP-01",
-        backend_url: str = "http://127.0.0.1:8000",
+        backend_url: str = "https://night-swatch-68ai.onrender.com",
         headless: bool = False,
         enable_sync: bool = True,
     ):
@@ -667,7 +667,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="IBVAP Edge Vision Engine")
     parser.add_argument("--source", type=str, default="0", help="RTSP URL, video file path, or webcam index (default: 0)")
     parser.add_argument("--camera-id", type=str, default="CAM-BOP-01", help="Edge Camera Identifier")
-    parser.add_argument("--backend-url", type=str, default="http://127.0.0.1:8000", help="Central Command API URL")
+    parser.add_argument("--backend-url", type=str, default="https://night-swatch-68ai.onrender.com", help="Central Command API URL")
     parser.add_argument("--headless", action="store_true", help="Run without cv2 GUI window")
     args = parser.parse_args()
 

@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from edge_node.anpr_engine import ANPREngine
 from edge_node.edge_queue import EdgeQueue
-from backend.main import app, ALERTS_DB
+from main import app, ALERTS_DB
 
 
 class TestPhase3TransmissionAndANPR(unittest.TestCase):

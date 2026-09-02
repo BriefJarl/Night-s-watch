@@ -23,7 +23,7 @@ class EdgeQueue:
     def __init__(
         self,
         db_path: str = "edge_alerts.db",
-        backend_url: str = "http://127.0.0.1:8000",
+        backend_url: str = "https://night-swatch-68ai.onrender.com",
         camera_id: str = "CAM-BOP-01",
         sync_interval_sec: float = 2.0,
     ):

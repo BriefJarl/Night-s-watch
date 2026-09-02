@@ -257,7 +257,7 @@ def _launch_vision_engines() -> None:
             engine = VisionEngine(
                 source=full_path,
                 camera_id=camera_id,
-                backend_url="http://127.0.0.1:8000",
+                backend_url="https://night-swatch-68ai.onrender.com",
                 headless=True,
                 enable_sync=False,   # sync handled by edge_queue separately
             )
