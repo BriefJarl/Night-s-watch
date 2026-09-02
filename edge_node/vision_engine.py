@@ -17,11 +17,13 @@ try:
     from edge_node.false_alarm_filter import FalseAlarmFilter
     from edge_node.rule_engine import RuleEngine
     from edge_node.anpr_engine import ANPREngine
+    from edge_node.face_engine import FaceEngine
     from edge_node.edge_queue import EdgeQueue
 except ImportError:
     from false_alarm_filter import FalseAlarmFilter
     from rule_engine import RuleEngine
     from anpr_engine import ANPREngine
+    from face_engine import FaceEngine
     from edge_queue import EdgeQueue
 
 
@@ -82,8 +84,9 @@ class VisionEngine:
         self.false_alarm_filter = FalseAlarmFilter()
         self.rule_engine = RuleEngine()
 
-        # Phase 3 Components
+        # Phase 3 Components (ANPR & Biometric Face Engine)
         self.anpr_engine = ANPREngine(use_gpu=False)
+        self.face_engine = FaceEngine()
         self.edge_queue = EdgeQueue(
             db_path=f"edge_alerts_{self.camera_id}.db",
             backend_url=self.backend_url,
@@ -359,18 +362,50 @@ class VisionEngine:
             dist_m = val_result["distance"]
 
             if is_valid:
-                # Vehicle ANPR Extraction
                 detected_plate = None
-                if class_id in [2, 3, 5, 7]:  # Vehicles
-                    crop_y1 = max(0, y1)
-                    crop_y2 = min(h, y2)
-                    crop_x1 = max(0, x1)
-                    crop_x2 = min(w, x2)
-                    if crop_y2 > crop_y1 and crop_x2 > crop_x1:
-                        veh_crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
-                        detected_plate, _ = self.anpr_engine.process_vehicle_frame(track_id, veh_crop)
+                matched_suspect = None
+                face_conf = 0.0
+                face_box = None
 
-                # 2. Rule Engine Evaluation
+                crop_y1 = max(0, y1)
+                crop_y2 = min(h, y2)
+                crop_x1 = max(0, x1)
+                crop_x2 = min(w, x2)
+
+                if crop_y2 > crop_y1 and crop_x2 > crop_x1:
+                    target_crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
+
+                    # 1. Vehicle ANPR Extraction with YOLO plate detector
+                    if class_id in [2, 3, 5, 7]:
+                        detected_plate, _ = self.anpr_engine.process_vehicle_frame(track_id, target_crop)
+                        # Draw localized plate box on vehicle if detected
+                        plate_box = self.anpr_engine.last_plate_bboxes.get(track_id)
+                        if plate_box:
+                            pbx1, pby1, pbx2, pby2 = plate_box
+                            cv2.rectangle(
+                                frame,
+                                (crop_x1 + pbx1, crop_y1 + pby1),
+                                (crop_x1 + pbx2, crop_y1 + pby2),
+                                (0, 255, 128),
+                                2,
+                            )
+
+                    # 2. Person Biometric Watchlist Identification
+                    elif class_id == 0:
+                        matched_suspect, face_conf, face_box = self.face_engine.detect_and_match(
+                            target_crop, track_id=track_id
+                        )
+                        if face_box and matched_suspect:
+                            fx, fy, fw, fh = face_box
+                            cv2.rectangle(
+                                frame,
+                                (crop_x1 + fx, crop_y1 + fy),
+                                (crop_x1 + fx + fw, crop_y1 + fy + fh),
+                                (0, 0, 255),
+                                2,
+                            )
+
+                # 3. Rule Engine Evaluation
                 history = self.false_alarm_filter.track_history.get(track_id, [])
                 alert_payload = self.rule_engine.evaluate_track(
                     track_id=track_id,
@@ -381,6 +416,8 @@ class VisionEngine:
                     confidence=conf,
                     tripwire_event=val_result["tripwire_event"],
                     timestamp=timestamp,
+                    suspect_id=matched_suspect,
+                    face_confidence=face_conf if matched_suspect else None,
                 )
 
                 # Skip if rule engine filtered out the detection (Civilian zone, no rules matched)
@@ -395,6 +432,9 @@ class VisionEngine:
                 alert_payload["camera_id"] = self.camera_id
                 if detected_plate:
                     alert_payload["license_plate"] = detected_plate
+                if matched_suspect:
+                    alert_payload["suspect_id"] = matched_suspect
+                    alert_payload["face_confidence"] = face_conf
 
                 current_alerts.append(alert_payload)
 
@@ -407,14 +447,10 @@ class VisionEngine:
                 if alert_payload.get("is_threat", False):
                     active_threat_count += 1
 
-                # 3. Store-and-Forward Enqueueing (Rate limited to 1 alert per 3 sec per track)
+                # 4. Store-and-Forward Enqueueing (Rate limited to 1 alert per 3 sec per track)
                 last_enq = self.last_enqueued_timestamps.get(track_id, 0.0)
                 if (timestamp - last_enq > 3.0) and (alert_payload.get("is_threat") or priority_score >= 35.0):
-                    crop_y1 = max(0, y1)
-                    crop_y2 = min(h, y2)
-                    crop_x1 = max(0, x1)
-                    crop_x2 = min(w, x2)
-                    target_crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
+                    target_crop = frame[crop_y1:crop_y2, crop_x1:crop_x2] if crop_y2 > crop_y1 and crop_x2 > crop_x1 else None
                     self.edge_queue.enqueue_alert(
                         alert_payload,
                         image_crop=target_crop,
@@ -423,7 +459,7 @@ class VisionEngine:
                     self.last_enqueued_timestamps[track_id] = timestamp
 
                 # Color coding based on Priority Level
-                if priority_level == "CRITICAL":
+                if matched_suspect or priority_level == "CRITICAL":
                     box_color = (0, 0, 255)  # Red
                 elif priority_level == "HIGH":
                     box_color = (0, 140, 255)  # Amber
@@ -433,7 +469,8 @@ class VisionEngine:
                     box_color = (0, 255, 0)  # Green
 
                 plate_label = f" [{detected_plate}]" if detected_plate else ""
-                label = f"ID:{track_id} {cls_name}{plate_label} | {dist_m:.1f}m | {velocity:.1f}m/s | P:{priority_score:.0f}"
+                suspect_label = f" [SUSPECT: {matched_suspect}]" if matched_suspect else ""
+                label = f"ID:{track_id} {cls_name}{plate_label}{suspect_label} | {dist_m:.1f}m | {velocity:.1f}m/s | P:{priority_score:.0f}"
             else:
                 box_color = (160, 160, 160)
                 label = f"ID:{track_id} (FILTERED: {val_result['filter_reason']})"
@@ -454,6 +491,7 @@ class VisionEngine:
         self.false_alarm_filter.cleanup_old_tracks(active_track_ids)
         self.rule_engine.cleanup_old_tracks(active_track_ids)
         self.anpr_engine.cleanup_old_tracks(active_track_ids)
+        self.face_engine.cleanup_old_tracks(active_track_ids)
 
         # Render HUD
         frame = self.draw_hud(frame, motion_detected, active_threat_count)

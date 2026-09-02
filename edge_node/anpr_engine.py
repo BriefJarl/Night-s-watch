@@ -1,8 +1,10 @@
+import os
 import cv2
 import re
 import numpy as np
 from collections import Counter
 from typing import Optional, Tuple, List, Dict, Any
+
 
 
 class ANPREngine:
@@ -25,15 +27,26 @@ class ANPREngine:
     NUM_TO_ALPHA = {"0": "O", "1": "I", "8": "B", "5": "S", "2": "Z"}
     ALPHA_TO_NUM = {"O": "0", "I": "1", "B": "8", "S": "5", "Z": "2", "D": "0", "Q": "0"}
 
-    def __init__(self, use_gpu: bool = False, history_size: int = 15):
+    def __init__(
+        self,
+        use_gpu: bool = False,
+        history_size: int = 15,
+        plate_detector_path: str = "weights/yolov8n_license_plate.pt",
+    ):
         self.history_size = history_size
         # Track history map: track_id -> List[str]
         self.plate_history: Dict[int, List[Dict[str, Any]]] = {}
+        self.last_plate_bboxes: Dict[int, Tuple[int, int, int, int]] = {}
 
         # Initialize EasyOCR reader lazily or in init
         self.reader = None
         self.use_gpu = use_gpu
         self._init_reader()
+
+        # Initialize YOLO License Plate Detector
+        self.plate_detector_path = plate_detector_path
+        self.plate_detector = None
+        self._init_plate_detector()
 
     def _init_reader(self):
         """Initializes EasyOCR reader safely."""
@@ -43,6 +56,55 @@ class ANPREngine:
         except Exception as e:
             print(f"[ANPREngine] Warning: Could not initialize EasyOCR ({e}). Falling back to pattern mode.")
             self.reader = None
+
+    def _init_plate_detector(self):
+        """Initializes the lightweight YOLOv8 license plate detector."""
+        target_path = self.plate_detector_path
+        if not os.path.exists(target_path):
+            # Check relative to project root
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+            alt_path = os.path.join(base_dir, target_path)
+            if os.path.exists(alt_path):
+                target_path = alt_path
+
+        if os.path.exists(target_path):
+            try:
+                from ultralytics import YOLO
+                self.plate_detector = YOLO(target_path)
+                print(f"[ANPREngine] Loaded YOLO license plate detector from {target_path}")
+            except Exception as e:
+                print(f"[ANPREngine] Warning: Could not load YOLO plate detector ({e}). Falling back to heuristic ROI.")
+                self.plate_detector = None
+        else:
+            print(f"[ANPREngine] Notice: {self.plate_detector_path} not found. Using heuristic ROI.")
+
+
+    def detect_plate_bbox(self, vehicle_crop: np.ndarray, conf_threshold: float = 0.30) -> Optional[Tuple[int, int, int, int]]:
+        """
+        Runs YOLO license plate detection on a vehicle crop.
+        Returns:
+            (x1, y1, x2, y2) bounding box in vehicle_crop coordinate space, or None.
+        """
+        if self.plate_detector is None or vehicle_crop is None or vehicle_crop.size == 0:
+            return None
+
+        try:
+            results = self.plate_detector(vehicle_crop, conf=conf_threshold, verbose=False)
+            best_box = None
+            highest_conf = 0.0
+
+            for r in results:
+                if r.boxes is not None and len(r.boxes) > 0:
+                    for box in r.boxes:
+                        b_conf = float(box.conf[0].item())
+                        if b_conf > highest_conf:
+                            highest_conf = b_conf
+                            xyxy = box.xyxy[0].tolist()
+                            best_box = (int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3]))
+
+            return best_box
+        except Exception as e:
+            return None
 
     @staticmethod
     def order_points(pts: np.ndarray) -> np.ndarray:
@@ -258,12 +320,28 @@ class ANPREngine:
         if plate_quad is not None:
             plate_img = self.warp_perspective(vehicle_crop, plate_quad)
         else:
-            # Heuristic: license plate is typically in the bottom 40% center of vehicle crop
-            h, w = vehicle_crop.shape[:2]
-            y1 = int(h * 0.60)
-            x1 = int(w * 0.15)
-            x2 = int(w * 0.85)
-            plate_img = vehicle_crop[y1:h, x1:x2]
+            # 1. Try YOLO License Plate Detector first for high precision
+            plate_box = self.detect_plate_bbox(vehicle_crop)
+            if plate_box is not None:
+                px1, py1, px2, py2 = plate_box
+                vh, vw = vehicle_crop.shape[:2]
+                # Add 5% padding around plate
+                pad_w = int((px2 - px1) * 0.05)
+                pad_h = int((py2 - py1) * 0.05)
+                crop_x1 = max(0, px1 - pad_w)
+                crop_y1 = max(0, py1 - pad_h)
+                crop_x2 = min(vw, px2 + pad_w)
+                crop_y2 = min(vh, py2 + pad_h)
+                plate_img = vehicle_crop[crop_y1:crop_y2, crop_x1:crop_x2]
+                self.last_plate_bboxes[track_id] = (crop_x1, crop_y1, crop_x2, crop_y2)
+            else:
+                # 2. Fallback Heuristic: license plate is typically in the bottom 40% center of vehicle crop
+                h, w = vehicle_crop.shape[:2]
+                y1 = int(h * 0.60)
+                x1 = int(w * 0.15)
+                x2 = int(w * 0.85)
+                plate_img = vehicle_crop[y1:h, x1:x2]
+                self.last_plate_bboxes[track_id] = (x1, y1, x2, h)
 
         plate_str, conf = self.extract_plate_text(plate_img)
 
@@ -288,3 +366,5 @@ class ANPREngine:
         stale_ids = [tid for tid in self.plate_history if tid not in active_set]
         for tid in stale_ids:
             del self.plate_history[tid]
+            if tid in self.last_plate_bboxes:
+                del self.last_plate_bboxes[tid]

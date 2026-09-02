@@ -85,6 +85,9 @@ st.markdown(
     .cctv-live-dot { position: absolute; top: 12px; right: 12px; width: 8px; height: 8px; background: #22c55e; border-radius: 50%; animation: pulse-live 1.8s infinite; }
     @keyframes pulse-live { 0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); } 70% { box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); } 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); } }
     .zone-preview-box { background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 10px; padding: 16px; margin-top: 12px; }
+    div[data-testid="stSegmentedControl"] { background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 12px; padding: 4px; margin-bottom: 24px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4); display: flex; width: 100%; }
+    div[data-testid="stSegmentedControl"] button { font-weight: 700 !important; font-size: 13px !important; letter-spacing: 0.5px !important; color: #94a3b8 !important; border-radius: 8px !important; padding: 8px 16px !important; flex: 1; transition: all 0.25s ease !important; }
+    div[data-testid="stSegmentedControl"] button[aria-checked="true"] { background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%) !important; color: #ffffff !important; box-shadow: 0 0 15px rgba(56, 189, 248, 0.4) !important; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -190,18 +193,41 @@ def render_alert_card(alert: Dict, url: str, key_prefix: str = ""):
     vel = alert.get("velocity_mps", 0.0)
     zone = alert.get("zone", "Unspecified Zone").replace("_", " ")
     plate = alert.get("license_plate")
+    suspect = alert.get("suspect_id")
+    face_conf = alert.get("face_confidence", 0.0)
     timestamp_str = alert.get("timestamp", "").replace("T", " ").replace("Z", "")
     thumb = alert.get("thumbnail_b64")
 
     badge_cls = f"badge-{priority_level.lower()}"
-    card_cls = f"card-{priority_level.lower()}"
+    card_cls = f"card-{priority_level.lower()}" if not suspect else "card-critical"
 
-    st.markdown(f'<div class="alert-card {card_cls}">', unsafe_allow_html=True)
-    st.markdown(
-        f"""
+    suspect_badge = '<span class="badge badge-critical" style="margin-left: 6px;"><i class="fa-solid fa-user-ninja"></i> WATCHLIST MATCH</span>' if suspect else ""
+
+    plate_html = (
+        f'<div class="telemetry-item" style="grid-column: span 2;">'
+        f'<div class="telemetry-lbl">ANPR RECOGNITION</div>'
+        f'<div class="telemetry-val" style="color: #fef08a; font-size: 14px; letter-spacing: 2px; text-align: center;">'
+        f'<i class="fa-solid fa-car-side"></i> {plate}</div></div>'
+    ) if plate else ""
+
+    suspect_html = (
+        f'<div class="telemetry-item" style="grid-column: span 2; background: rgba(127, 29, 29, 0.45); border: 1px solid #ef4444;">'
+        f'<div class="telemetry-lbl" style="color: #fca5a5;"><i class="fa-solid fa-triangle-exclamation"></i> BIOMETRIC WATCHLIST HIT</div>'
+        f'<div class="telemetry-val" style="color: #fee2e2; font-size: 13px; font-weight: 700; letter-spacing: 0.5px;">'
+        f'{suspect} ({int(face_conf * 100) if face_conf else 0}% match)</div></div>'
+    ) if suspect else ""
+
+    thumb_html = f'<img src="{thumb}" class="compressed-img" style="max-width:380px; margin-bottom: 12px;"/>' if (thumb and thumb.startswith("data:image")) else """<div style="background: rgba(0,0,0,0.4); height: 120px; display: flex; align-items: center;
+                justify-content: center; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);
+                color: #475569; font-size: 12px; font-weight: 500; margin-bottom: 12px;">
+                <i class="fa-solid fa-image-slash" style="margin-right: 8px;"></i> No Visual Evidence</div>"""
+
+    card_html = f"""
+    <div class="alert-card {card_cls}">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
             <div>
                 <span class="badge {badge_cls}">{priority_level} : SCORE {priority_score:.1f}</span>
+                {suspect_badge}
                 <h3 style="margin: 8px 0 0 0; font-size: 16px; font-weight: 700;">{primary_rule}</h3>
             </div>
             <div style="text-align: right; font-size: 11px;">
@@ -211,36 +237,20 @@ def render_alert_card(alert: Dict, url: str, key_prefix: str = ""):
         <div style="color: #94a3b8; font-size: 11px; margin-bottom: 12px;">
             <i class="fa-solid fa-camera"></i> {alert.get('camera_id', 'CAM-01')} | {zone}
         </div>
-        """,
-        unsafe_allow_html=True
-    )
-    if thumb and thumb.startswith("data:image"):
-        with st.expander("🔍 View Full Image"):
-            st.image(thumb, use_container_width=True)
-        st.markdown(f'<img src="{thumb}" class="compressed-img" style="max-width:380px;"/>', unsafe_allow_html=True)
-    else:
-        st.markdown(
-            """<div style="background: rgba(0,0,0,0.4); height: 120px; display: flex; align-items: center;
-                justify-content: center; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);
-                color: #475569; font-size: 12px; font-weight: 500; margin-bottom: 12px;">
-                <i class="fa-solid fa-image-slash" style="margin-right: 8px;"></i> No Visual Evidence</div>""",
-            unsafe_allow_html=True,
-        )
-    plate_html = (
-        f'<div class="telemetry-item" style="grid-column: span 2;">'
-        f'<div class="telemetry-lbl">ANPR RECOGNITION</div>'
-        f'<div class="telemetry-val" style="color: #fef08a; font-size: 14px; letter-spacing: 2px; text-align: center;">'
-        f'<i class="fa-solid fa-car-side"></i> {plate}</div></div>'
-    ) if plate else ""
-    st.markdown(
-        f"""<div class="telemetry-grid">
+        {thumb_html}
+        <div class="telemetry-grid">
             <div class="telemetry-item"><div class="telemetry-lbl">Target</div><div class="telemetry-val" style="color: #38bdf8;">{obj_class}</div></div>
             <div class="telemetry-item"><div class="telemetry-lbl">Speed</div><div class="telemetry-val">{vel:.1f} m/s</div></div>
             {plate_html}
-        </div>""",
-        unsafe_allow_html=True,
-    )
-    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+            {suspect_html}
+        </div>
+    </div>
+    """
+    st.markdown(card_html, unsafe_allow_html=True)
+    if thumb and thumb.startswith("data:image"):
+        with st.expander("🔍 View Full Evidence"):
+            st.image(thumb, width="stretch")
+
     btn1, btn2 = st.columns(2)
     with btn1:
         if st.button("Dispatch", key=f"{key_prefix}conf_{alert_id}", help="Confirm threat and dispatch units"):
@@ -248,7 +258,7 @@ def render_alert_card(alert: Dict, url: str, key_prefix: str = ""):
     with btn2:
         if st.button("Mark False", key=f"{key_prefix}false_{alert_id}", help="Flag as false alarm for retraining"):
             submit_feedback(url, alert_id, "FALSE_ALARM", "Flagged.")
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
 
 # --- Setup Wizard / System Configuration ---
@@ -360,19 +370,28 @@ with col5:
 st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TABS
+# TACTICAL NAVIGATION TABS
 # ─────────────────────────────────────────────────────────────────────────────
-tab_live, tab_map, tab_queue, tab_config, tab_ai = st.tabs([
+tab_options = [
     "📹  Live Feeds",
     "🗺️  Tactical Map",
     "🛡️  Alert Queue",
     "⚙️  Camera Config",
     "🤖  AI Reports",
-])
+]
+selected_tab = st.segmented_control(
+    "Tactical Sector Navigation",
+    tab_options,
+    default="📹  Live Feeds",
+    key="active_tactical_tab",
+    label_visibility="collapsed",
+)
+if not selected_tab:
+    selected_tab = tab_options[0]
 
 
 # ─── TAB 1: LIVE FEEDS ───────────────────────────────────────────────────────
-with tab_live:
+if selected_tab == tab_options[0]:
     st.markdown(
         "<h2 style='font-size: 22px; font-weight: 700; margin-bottom: 4px;'>"
         "<i class='fa-solid fa-video'></i> Live Surveillance Wall</h2>"
@@ -426,7 +445,7 @@ with tab_live:
 
 
 # ─── TAB 2: TACTICAL MAP ─────────────────────────────────────────────────────
-with tab_map:
+elif selected_tab == tab_options[1]:
     alerts = fetch_alerts(backend_url, priority_filter, status_filter, camera_filter)
     col_map, col_queue = st.columns([7, 3])
 
@@ -488,7 +507,7 @@ with tab_map:
 
 
 # ─── TAB 3: ALERT QUEUE ──────────────────────────────────────────────────────
-with tab_queue:
+elif selected_tab == tab_options[2]:
     alerts = fetch_alerts(backend_url, priority_filter, status_filter, camera_filter)
     st.markdown(
         f"<h2 style='font-size: 22px; font-weight: 700; margin-bottom: 2px;'>"
@@ -514,7 +533,7 @@ with tab_queue:
 
 
 # ─── TAB 4: CAMERA CONFIG ────────────────────────────────────────────────────
-with tab_config:
+elif selected_tab == tab_options[3]:
     st.markdown(
         "<h2 style='font-size: 22px; font-weight: 700; margin-bottom: 4px;'>"
         "<i class='fa-solid fa-camera'></i> Camera Operational Mode</h2>"
@@ -545,7 +564,7 @@ with tab_config:
 
         st.markdown("<hr style='border-color: rgba(255,255,255,0.08); margin: 16px 0;'>", unsafe_allow_html=True)
 
-        if st.button("\U0001f4be Save Configuration", key=f"save_config_{selected_cam}", use_container_width=True):
+        if st.button("\U0001f4be Save Configuration", key=f"save_config_{selected_cam}", width="stretch"):
             try:
                 resp = requests.post(
                     f"{backend_url}/api/v1/cameras/{selected_cam}/zones",
@@ -564,7 +583,7 @@ with tab_config:
 
 
 # ─── TAB 5: AI REPORTS ───────────────────────────────────────────────────────
-with tab_ai:
+elif selected_tab == tab_options[4]:
     st.markdown(
         "<h2 style='font-size: 22px; font-weight: 700; margin-bottom: 4px;'>"
         "<i class='fa-solid fa-robot'></i> AI Copilot & Reports</h2>"
@@ -575,38 +594,53 @@ with tab_ai:
 
     query = st.text_input("Ask a question about recent alerts (e.g., 'Summarize incursions on CAM-BOP-01'):", value="Give me a daily incident report for CAM-BOP-01.")
 
-    if st.button("Generate AI Report", type="primary", use_container_width=True):
-        with st.spinner("Retrieving historical context and generating report..."):
+    if st.button("Generate AI Report", type="primary", width="stretch"):
+        with st.spinner("Retrieving historical context and analyzing incursions..."):
             try:
-                # 1. Ask Backend for Context
-                r = requests.post(f"{backend_url}/api/v1/investigate", json={"query": query}, timeout=5.0)
+                # 1. Ask Backend for Context & Synthesized Report
+                r = requests.post(f"{backend_url}/api/v1/investigate", json={"query": query}, timeout=8.0)
                 if r.status_code == 200:
                     data = r.json()
                     generated_prompt = data.get("generated_prompt", "")
+                    synthesized_report = data.get("synthesized_report", "")
 
-                    # 2. Ask Local Ollama
+                    report_markdown = ""
+                    source_badge = ""
+
+                    # 2. Try Local Ollama if available
                     try:
                         ollama_url = "http://localhost:11434/api/generate"
                         ollama_payload = {
-                            "model": "llama3", # default to llama3
+                            "model": "llama3",
                             "prompt": generated_prompt,
                             "stream": False
                         }
-                        ollama_r = requests.post(ollama_url, json=ollama_payload, timeout=20.0)
-
+                        ollama_r = requests.post(ollama_url, json=ollama_payload, timeout=2.0)
                         if ollama_r.status_code == 200:
-                            report_text = ollama_r.json().get("response", "")
-                            st.markdown("### Generated Report")
-                            st.markdown(f"<div style='background: rgba(15,23,42,0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 20px; color: #e2e8f0; line-height: 1.6;'>{report_text}</div>", unsafe_allow_html=True)
-                        else:
-                            st.warning(f"Local LLM (Ollama) error: {ollama_r.status_code}. Make sure Ollama is running on localhost:11434.")
-                            st.markdown("#### Prompt that would have been sent:")
-                            st.text(generated_prompt)
+                            report_markdown = ollama_r.json().get("response", "")
+                            source_badge = "🤖 Generated by Local LLM (Ollama llama3)"
+                    except Exception:
+                        pass # Seamless fallback to tactical RAG synthesizer
 
-                    except requests.exceptions.RequestException:
-                        st.warning("Could not connect to Local LLM at `http://localhost:11434`. Ensure Ollama is running.")
-                        st.markdown("#### RAG Context & Prompt:")
-                        st.text(generated_prompt)
+                    # 3. If Ollama is offline or unavailable, use the Tactical RAG Intelligence Engine
+                    if not report_markdown:
+                        report_markdown = synthesized_report or "No incident telemetry found matching query."
+                        source_badge = "⚡ Generated by Built-in Tactical RAG Intelligence Engine (Ollama offline at localhost:11434)"
+
+                    st.markdown(
+                        f"<div style='display: inline-block; background: rgba(56, 189, 248, 0.12); "
+                        f"border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 6px; "
+                        f"padding: 5px 14px; font-size: 11px; font-weight: 700; color: #38bdf8; margin-bottom: 16px;'>"
+                        f"{source_badge}</div>",
+                        unsafe_allow_html=True
+                    )
+
+                    with st.container(border=True):
+                        st.markdown(report_markdown)
+
+                    with st.expander("🔍 View Raw RAG Context & LLM Prompt Template", expanded=False):
+                        st.code(generated_prompt, language="markdown")
+
                 else:
                     st.error(f"Backend RAG API error: {r.text}")
             except Exception as e:
@@ -620,6 +654,7 @@ with tab_ai:
         )
 
 # --- Auto Refresh ---
-if auto_refresh:
+# Only refresh when on monitoring tabs so configuration & AI prompt typing are never interrupted
+if auto_refresh and selected_tab in [tab_options[0], tab_options[1], tab_options[2]]:
     time.sleep(refresh_rate)
     st.rerun()

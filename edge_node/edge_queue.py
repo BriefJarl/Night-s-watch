@@ -69,10 +69,22 @@ class EdgeQueue:
                     license_plate TEXT,
                     thumbnail_b64 TEXT,
                     synced_status INTEGER DEFAULT 0,
-                    created_at REAL NOT NULL
+                    created_at REAL NOT NULL,
+                    suspect_id TEXT,
+                    face_confidence REAL
                 )
                 """
             )
+            # Safely migrate existing databases if columns missing
+            try:
+                cursor.execute("ALTER TABLE alerts ADD COLUMN suspect_id TEXT")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE alerts ADD COLUMN face_confidence REAL")
+            except Exception:
+                pass
+
             cursor.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_alerts_sync_priority 
@@ -139,6 +151,9 @@ class EdgeQueue:
 
         created_at = time.time()
 
+        suspect_id = alert_payload.get("suspect_id")
+        face_confidence = alert_payload.get("face_confidence")
+
         try:
             with self._lock:
                 conn = sqlite3.connect(self.db_path)
@@ -149,8 +164,8 @@ class EdgeQueue:
                         alert_id, timestamp, camera_id, track_id, object_class, class_id,
                         confidence, world_coords_x, world_coords_y, velocity_mps, heading_deg,
                         zone, primary_rule, active_rules_json, priority_score, priority_level,
-                        license_plate, thumbnail_b64, synced_status, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                        license_plate, thumbnail_b64, synced_status, created_at, suspect_id, face_confidence
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
                     """,
                     (
                         alert_id,
@@ -172,6 +187,8 @@ class EdgeQueue:
                         plate,
                         thumbnail_b64,
                         created_at,
+                        suspect_id,
+                        face_confidence,
                     ),
                 )
                 conn.commit()
@@ -201,7 +218,7 @@ class EdgeQueue:
             )
             rows = cursor.fetchall()
             for row in rows:
-                alerts.append({
+                alert_data = {
                     "alert_id": row["alert_id"],
                     "timestamp": row["timestamp"],
                     "camera_id": row["camera_id"],
@@ -220,7 +237,11 @@ class EdgeQueue:
                     "license_plate": row["license_plate"],
                     "thumbnail_b64": row["thumbnail_b64"],
                     "synced_status": bool(row["synced_status"]),
-                })
+                }
+                if "suspect_id" in row.keys() and row["suspect_id"]:
+                    alert_data["suspect_id"] = row["suspect_id"]
+                    alert_data["face_confidence"] = row["face_confidence"]
+                alerts.append(alert_data)
             conn.close()
         return alerts
 

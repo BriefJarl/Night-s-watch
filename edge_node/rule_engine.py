@@ -32,6 +32,7 @@ class RuleEngine:
 
     # Base rule severity weights
     RULE_WEIGHTS = {
+        "WATCHLIST_SUSPECT_BREACH": 98.0,
         "TAMPER_OCCLUSION": 95.0,
         "TAMPER_DEFOCUS": 95.0,
         "TRIPWIRE_INBOUND": 90.0,
@@ -237,7 +238,9 @@ class RuleEngine:
         confidence: float,
         tripwire_event: Optional[str] = None,
         timestamp: Optional[float] = None,
-    ) -> Dict[str, Any]:
+        suspect_id: Optional[str] = None,
+        face_confidence: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
         """
         Evaluates spatiotemporal behavioral rules over a confirmed track and generates an alert payload.
         Returns:
@@ -261,6 +264,10 @@ class RuleEngine:
 
         # 3. Behavioral Rules Evaluation
         active_rules = []
+
+        # Watchlist Suspect Match (Instant Critical Alert)
+        if suspect_id:
+            active_rules.append("WATCHLIST_SUSPECT_BREACH")
 
         # Rule A: Tripwire Inbound Breach
         if tripwire_event == "INBOUND":
@@ -287,13 +294,38 @@ class RuleEngine:
         else:
             dwell_time = 0.0
 
+        # Rule B: Loitering Detection
+        if current_zone in ["RED_ZONE", "AMBER_ZONE"] and dwell_time >= self.loiter_time_threshold:
+            active_rules.append("LOITERING")
+
+        # Rule C: Crawling / Prone Infiltration (Person class 0)
+        # Standard standing human aspect ratio (H/W) is ~ 2.0 - 3.5.
+        # Crawling / prone posture has inverted or low aspect ratio (H/W < 0.85).
+        if class_id == 0:
+            if aspect_ratio < 0.85 and 0.05 <= velocity_mps <= 1.2:
+                active_rules.append("CRAWLING_INTRUSION")
+
+        # Rule D: Zone Intrusion (Red Zone Zero Line - world coordinates)
+        if current_zone == "RED_ZONE":
+            active_rules.append("ZONE_INTRUSION")
+
+        # Rule E: Speeding / Sprinting / High-Speed Vehicle
+        if class_id == 0 and velocity_mps > self.person_speed_threshold:
+            active_rules.append("SPEEDING")
+        elif class_id in [2, 3, 5, 7] and velocity_mps > self.vehicle_speed_threshold:
+            active_rules.append("SPEEDING")
+
+        # Rule F (Phase 5): Operator-defined Restricted Zone Intrusion (pixel space).
+        if hasattr(self, "is_in_user_zone") and self.is_in_user_zone(u, v):
+            active_rules.append("RESTRICTED_ZONE_INTRUSION")
+
         # -------------------------------------------------------------
-        # STRICT SURVEILLANCE MODE RULES (Overrides legacy rules)
+        # STRICT SURVEILLANCE MODE RULES
         # -------------------------------------------------------------
         mode = getattr(self, "user_zone_mode", "Alert zone")
         if mode == "Civilian zone":
-            # Lenient mode: Ignore standard human and vehicle detection — no alert
-            if class_id in [0, 2, 3, 5, 7]:
+            # In civilian zone, ignore detections unless a suspect or serious breach rule is present
+            if not suspect_id and not any(r in ["WATCHLIST_SUSPECT_BREACH", "CRAWLING_INTRUSION", "TRIPWIRE_INBOUND"] for r in active_rules):
                 return None
         elif mode == "No Civilian zone":
             if class_id == 0:
@@ -303,16 +335,12 @@ class RuleEngine:
                 active_rules.append("RESTRICTED_ZONE_INTRUSION_HIGH_ALERT")
         elif mode == "Emergency/sensitive zone":
             active_rules.append("RESTRICTED_ZONE_INTRUSION_HIGH_ALERT")
-        else:
-            # Fallback for "Alert zone" or legacy modes
-            active_rules.append("RESTRICTED_ZONE_INTRUSION")
-
-        # If the strict surveillance mode did not trigger an alert, ignore the detection.
-        if not active_rules:
-            return None
 
         # Determine Primary Rule by highest severity weight
-        primary_rule = max(active_rules, key=lambda r: self.RULE_WEIGHTS.get(r, 0.0))
+        if not active_rules:
+            primary_rule = "NOMINAL_TRACK"
+        else:
+            primary_rule = max(active_rules, key=lambda r: self.RULE_WEIGHTS.get(r, 0.0))
 
         # 4. Priority Scoring Function
         priority_score, priority_level = self.compute_priority_score(
@@ -347,6 +375,10 @@ class RuleEngine:
             "is_threat": (priority_level in ["CRITICAL", "HIGH"]),
             "synced_status": False,
         }
+
+        if suspect_id:
+            alert_payload["suspect_id"] = suspect_id
+            alert_payload["face_confidence"] = round(face_confidence, 2) if face_confidence else None
 
         return alert_payload
 

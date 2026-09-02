@@ -51,6 +51,8 @@ class AlertPayload(BaseModel):
     priority_score: float
     priority_level: str
     license_plate: Optional[str] = None
+    suspect_id: Optional[str] = None
+    face_confidence: Optional[float] = None
     thumbnail_b64: Optional[str] = None
     synced_status: Optional[bool] = True
     is_threat: Optional[bool] = None
@@ -95,8 +97,10 @@ class AlertResponse(BaseModel):
     active_rules: List[str]
     priority_score: float
     priority_level: str
-    license_plate: Optional[str]
-    thumbnail_b64: Optional[str]
+    license_plate: Optional[str] = None
+    suspect_id: Optional[str] = None
+    face_confidence: Optional[float] = None
+    thumbnail_b64: Optional[str] = None
     feedback_status: Optional[str] = "PENDING_REVIEW"
     operator_notes: Optional[str] = ""
 
@@ -602,10 +606,12 @@ async def investigate_alerts(payload: InvestigateQuery, db: Session = Depends(ge
                 f"--- Query ---\n{payload.query}\n\n"
                 f"--- Response ---\n"
             )
+            synthesized = genai_copilot.synthesize_incident_report(payload.query, context_docs)
             return {
                 "query": payload.query,
                 "generated_prompt": prompt,
-                "context_documents": context_docs
+                "context_documents": context_docs,
+                "synthesized_report": synthesized,
             }
             
         # Step 1: Embed the query
@@ -621,11 +627,13 @@ async def investigate_alerts(payload: InvestigateQuery, db: Session = Depends(ge
         
         # Return structured data that a frontend or LLM client can use
         context_docs = [{"alert_id": r.alert_id, "text": r.semantic_text} for r in results]
+        synthesized = genai_copilot.synthesize_incident_report(payload.query, context_docs)
         
         return {
             "query": payload.query,
             "generated_prompt": prompt,
-            "context_documents": context_docs
+            "context_documents": context_docs,
+            "synthesized_report": synthesized,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

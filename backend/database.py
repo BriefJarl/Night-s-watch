@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 # Use DATABASE_URL from environment or default to a local test postgres instance
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
-    "postgresql+psycopg2://postgres:postgres@localhost:5432/ibvap"
+    "postgresql+psycopg2://postgres:Creta$0567@localhost:5432/ibvap"
 )
 
 # Connect to database
