@@ -559,6 +559,115 @@ with tab_detection:
     )
 
 
+    # ------------------------------------------------------------------
+    # Detection -> Alert pipeline (works on the hosted deployment).
+    # Posts a detection event to the API; the backend rule engine scores
+    # it and raises an alert, which appears in the Alert Queue tab.
+    # ------------------------------------------------------------------
+    with st.expander(
+        "⚡ Simulate a detection event (live alert pipeline)",
+        expanded=True,
+    ):
+
+        st.caption(
+            "Feeds a detection into the backend rule engine. Severity is "
+            "computed from object class and confidence, then written to the "
+            "alert queue - the same path a YOLO detection follows."
+        )
+
+        sim_col1, sim_col2 = st.columns(2)
+
+        with sim_col1:
+            sim_object = st.selectbox(
+                "Detected object",
+                [
+                    "person",
+                    "car",
+                    "truck",
+                    "motorcycle",
+                    "bus",
+                    "dog",
+                ],
+            )
+
+            sim_camera = st.selectbox(
+                "Camera",
+                [1, 2],
+                format_func=lambda x: f"CAM-0{x}",
+            )
+
+        with sim_col2:
+            sim_conf = st.slider(
+                "Detection confidence",
+                min_value=0.30,
+                max_value=0.99,
+                value=0.94,
+                step=0.01,
+            )
+
+            # Mirrors AlertService.evaluate_risk on the backend exactly.
+            _priority = {
+                "person", "car", "truck", "bus", "motorcycle",
+            }
+
+            if sim_object in _priority:
+                if sim_conf >= 0.90:
+                    _lvl, _c = "CRITICAL", "#ff4b4b"
+                elif sim_conf >= 0.75:
+                    _lvl, _c = "HIGH", "#ffa421"
+                elif sim_conf >= 0.60:
+                    _lvl, _c = "MEDIUM", "#29b5e8"
+                else:
+                    _lvl, _c = "LOW", "#7d8b99"
+            else:
+                if sim_conf >= 0.90:
+                    _lvl, _c = "HIGH", "#ffa421"
+                elif sim_conf >= 0.75:
+                    _lvl, _c = "MEDIUM", "#29b5e8"
+                else:
+                    _lvl, _c = "LOW", "#7d8b99"
+
+            st.markdown(
+                f"Predicted severity: "
+                f"<span style='color:{_c};font-weight:700'>{_lvl}</span>",
+                unsafe_allow_html=True,
+            )
+
+        if st.button(
+            "🚨 GENERATE DETECTION EVENT",
+            width="stretch",
+        ):
+            try:
+                _resp = requests.post(
+                    f"{API_BASE_URL}/api/v1/detection-events/",
+                    json={
+                        "camera_id": sim_camera,
+                        "object_type": sim_object,
+                        "confidence": round(sim_conf, 2),
+                    },
+                    timeout=30,
+                )
+                _resp.raise_for_status()
+                _ev = _resp.json()
+
+                st.success(
+                    f"Detection #{_ev['id']} recorded on CAM-0{sim_camera} - "
+                    f"{sim_object} @ {sim_conf:.2f}. "
+                    f"A {_lvl} alert has been raised."
+                )
+                st.info(
+                    "Open the **Alert Queue** tab to see it at the top of "
+                    "the queue, and resolve it."
+                )
+
+            except requests.RequestException as _err:
+                st.error(
+                    f"Could not reach the API: {_err}"
+                )
+
+    st.divider()
+
+
     uploaded_file = st.file_uploader(
         "Upload Surveillance Image",
         type=[
