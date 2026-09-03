@@ -1,6 +1,7 @@
 services:
   - type: web
     name: nightswatch-backend
+    branch: deploy
     runtime: python
     plan: free
     rootDir: backend
@@ -20,6 +21,7 @@ services:
 
   - type: web
     name: nightswatch-frontend
+    branch: deploy
     runtime: python
     plan: free
     rootDir: frontend
