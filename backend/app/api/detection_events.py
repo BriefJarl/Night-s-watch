@@ -18,6 +18,7 @@ from app.schemas.detection_event import (
 from app.services.detection_event_service import (
     DetectionEventService,
 )
+from app.services.alert_service import AlertService
 
 
 # NOTE: the video-upload endpoint and the YOLO/OpenCV imports were removed
@@ -33,6 +34,7 @@ router = APIRouter(
 
 
 detection_event_service = DetectionEventService()
+alert_service = AlertService()
 
 
 @router.post(
@@ -46,10 +48,20 @@ def create_detection_event(
 ):
 
     try:
-        return detection_event_service.create_detection_event(
+        event = detection_event_service.create_detection_event(
             db=db,
             detection_event_data=detection_event_data,
         )
+
+        # Evaluate risk and raise an alert for this detection.
+        # This is the same rule engine the AI route used; wiring it here
+        # keeps the alerting pipeline demonstrable without running YOLO.
+        alert_service.create_alert_for_detection(
+            db=db,
+            detection_event=event,
+        )
+
+        return event
 
     except ValueError as error:
         raise HTTPException(
