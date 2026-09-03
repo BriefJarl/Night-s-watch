@@ -439,8 +439,8 @@ with tab_live:
                 str(CAMERA1_DETECTED_VIDEO)
             )
 
-            st.success(
-                "🟢 CAM-01 • YOLO AI Detection Active"
+            st.info(
+                "CAM-01 • Pre-processed sample (YOLO output)"
             )
 
         # Otherwise show original video
@@ -451,7 +451,7 @@ with tab_live:
             )
 
             st.info(
-                "🔵 CAM-01 • Original surveillance feed"
+                "CAM-01 • Raw surveillance feed (no analytics)"
             )
 
         else:
@@ -476,8 +476,8 @@ with tab_live:
                 str(CAMERA2_DETECTED_VIDEO)
             )
 
-            st.success(
-                "🟢 CAM-02 • YOLO AI Detection Active"
+            st.info(
+                "CAM-02 • Pre-processed sample (YOLO output)"
             )
 
         # Otherwise show original video
@@ -488,7 +488,7 @@ with tab_live:
             )
 
             st.info(
-                "🔵 CAM-02 • Original surveillance feed"
+                "CAM-02 • Raw surveillance feed (no analytics)"
             )
 
         else:
@@ -605,9 +605,32 @@ with tab_detection:
                 "🧠 AI Detection Engine"
             )
 
+            _ai_online = False
+            try:
+                _probe = requests.get(
+                    f"{API_BASE_URL}/openapi.json",
+                    timeout=5,
+                )
+                _ai_online = (
+                    "/api/v1/ai/detect/image"
+                    in _probe.json().get("paths", {})
+                )
+            except Exception:
+                _ai_online = False
+
+            if not _ai_online:
+                st.info(
+                    "Live inference is not enabled on this hosted instance. "
+                    "The detection engine requires GPU-class memory beyond "
+                    "the free tier, so it runs on local hardware. "
+                    "The dashboard, alerting and event pipeline below are "
+                    "fully live."
+                )
+
             if st.button(
                 "🚀 RUN AI DETECTION",
                 width="stretch",
+                disabled=not _ai_online,
             ):
 
                 try:

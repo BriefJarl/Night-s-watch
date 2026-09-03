@@ -82,3 +82,9 @@ docker-compose.override.yml
 backend/media/processed/
 
 backend/media/processed/
+
+# Local database (regenerated on boot)
+backend/data/
+backend/media/video_uploads/
+nw_backend.tgz
+Claude outputs/

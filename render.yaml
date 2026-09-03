@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: nightswatch-backend
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: ALLOWED_ORIGINS
+        value: "*"
+
+  - type: web
+    name: nightswatch-frontend
+    runtime: python
+    plan: free
+    rootDir: frontend
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --server.enableCORS false --server.enableXsrfProtection false
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: API_BASE_URL
+        sync: false

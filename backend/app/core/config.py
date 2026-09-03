@@ -24,10 +24,7 @@ class Settings(BaseSettings):
 
     SECRET_KEY: str
 
-    ALLOWED_ORIGINS: str = (
-        "[http://localhost:3000](http://localhost:3000),"
-        "[http://localhost:8501](http://localhost:8501)"
-    )
+    ALLOWED_ORIGINS: str = "*"
 
     DATABASE_URL: str = f"sqlite:///{DATABASE_PATH.as_posix()}"
 
